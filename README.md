@@ -1,56 +1,78 @@
-# RUMI — Regional Urban Model Intercomparison
+# RUMI — Standard Output Grid
 
-## Overview
+## Grid Specification
 
-RUMI is a multi-phase international initiative to evaluate the performance of numerical models in predicting urban extreme weather events in coastal cities. **Phase 1** focuses on **Hong Kong**, leveraging its dense observational network, complex terrain, and frequent exposure to tropical cyclones, heavy rainfall, and extreme heat.
+All participating models must interpolate their output onto the following unified standard grid for intercomparison:
 
-The intercomparison welcomes regional NWP models (e.g., WRF, MPAS, UM, RAMS, ARPS) as well as AI-based weather prediction models.
+| Property | Value |
+|----------|-------|
+| Type | Regular latitude/longitude |
+| Resolution | 15 arc-seconds (~0.004167°, ~460 m) |
+| Latitude range | 22.12°N – 22.58°N |
+| Longitude range | 113.82°E – 114.45°E |
+| Grid dimensions | 152 (lon) × 111 (lat) |
+| Coverage | Hong Kong and surrounding waters |
 
-## Phase 1 Events
+## Output Variables
 
-| ID | Event | Period |
-|----|-------|--------|
-| MANGKHUT2018 | Typhoon Mangkhut | Sep 2018 |
-| HRAIN2023 | Black Rainstorm | Sep 2023 |
-| HRAIN2025 | Black Rainstorm | Aug 2025 |
-| HEAT2022 | Extreme Heat | Jul 2022 |
-| HEAT2024 | Extreme Heat | Aug 2024 |
+### Core 2D Variables (Mandatory)
 
-Participants may choose any subset of events. Running all five is encouraged but not required.
+| Variable | Description | Units |
+|----------|-------------|-------|
+| T2M | 2-m air temperature | K |
+| U10M | 10-m eastward wind | m/s |
+| V10M | 10-m northward wind | m/s |
+| PRATE | Precipitation rate | kg m⁻² s⁻¹ |
+| SLP | Mean sea level pressure | Pa |
+| RH2M | 2-m relative humidity | 0–1 |
+| TOTAL_PRECIP | Accumulated total precipitation | kg m⁻² |
+| PSFC | Surface pressure | Pa |
+| Q2M | 2-m specific humidity | kg/kg |
 
-## Experiments
+### 3D Pressure-Level Variables (Mandatory)
 
-- **RUMI-ERA5** (recommended): reanalysis-driven using ECMWF ERA5
-- **RUMI-FNL** (optional): reanalysis-driven using NCEP FNL (1999+)
-- **RUMI-GFS** (optional): forecast-driven using NCEP GFS (2010+)
-- **RUMI-OTHER** (optional): other reanalysis/analysis products
+18 standard pressure levels: 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50 hPa
 
-## Output Specifications
+| Variable | Description | Units |
+|----------|-------------|-------|
+| T | Air temperature | K |
+| Z | Geopotential height | m |
+| RH | Relative humidity | 0–1 |
+| U | Eastward wind | m/s |
+| V | Northward wind | m/s |
+| OMEGA | Vertical velocity | Pa/s |
+
+### Recommended Variables
+
+Additional surface variables (TSK, TD2M, LH, HFX, radiation fluxes, etc.) and 3D variables (THETA, Q, W, QC, QI, QR, TKE) are recommended but not required. See `create_ncdf.py` for the full list.
+
+## File Format
 
 - **Format**: NetCDF4, CF-1.8 conventions
-- **Standard grid**: 15 arc-second regular lat/lon over Hong Kong
-- Use `create_ncdf.py` as the reference script for generating compliant output files
-- A template file `RUMI_template_2d.nc` is provided for reference
+- **Time**: One timestamp per file, seconds since 1970-01-01 UTC
+- **Compression**: zlib enabled
+- **Missing value**: -9999.0
 
-## Repository Contents
+### Filename Convention
 
 ```
-├── Intercomparison-Guidelines_ZhenningLI_260401.docx   # Full protocol document
-├── create_ncdf.py                                       # NetCDF creation reference script
-├── RUMI_template_2d.nc                                  # Template output file
-└── README.md
+RUMI-{forcing}-{model}-{event}-{YYYYMMDDHHmmss}.nc
 ```
 
-## How to Participate
+Example: `RUMI-ERA5-WRF-MANGKHUT2018-20180916120000.nc`
 
-1. Check if your model can produce the required output variables over the Hong Kong domain
-2. Select at least one event from the table above
-3. Set up simulations following the guidelines document (recommended resolution: 1 km or finer)
-4. Format output using the provided `create_ncdf.py` script
-5. Contact the RUMI coordination team to register and submit data
+## Usage
 
-## Contact
+Use `create_ncdf.py` to generate compliant output files:
 
-For questions or to register participation, please contact the RUMI organizing team.
+```bash
+# Generate an example file with placeholder data
+python3 create_ncdf.py
 
-**Authors**: Zhenning LI, Xiaoming SHI, Chi Ming SHUM, Lewis BLUNN, Zhuo LIU, Jimmy Fung, Alexis Lau, and Fei Chen
+# To use with your model output:
+# 1. Update set_info() with your experiment metadata
+# 2. Modify get_model_data() to read your model output
+# 3. Run the script
+```
+
+A template file `RUMI_template_2d.nc` is also provided for reference.
