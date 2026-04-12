@@ -95,12 +95,29 @@ RECOMMENDED_2D_DIAG_VARS = [
     ('CBH',         'cloud_base_altitude',                                  'Cloud base height above sea level',                   'm',          {}),
     ('CWP',         'atmosphere_cloud_liquid_water_content',                'Column-integrated cloud liquid water path',           'kg m-2',     {}),
     ('IWP',         'atmosphere_cloud_ice_content',                         'Column-integrated cloud ice water path',              'kg m-2',     {}),
-    ('PW',          'atmosphere_water_vapor_content',                       'Precipitable water (total column water vapor)',        'kg m-2',     {}),
+    ('RWP',         'atmosphere_mass_content_of_rain',                      'Column-integrated cloud rain water path',             'kg m-2',     {}),
+    ('PW',          'atmosphere_water_vapor_content',                       'Precipitable water (total column water vapor)',       'kg m-2',     {}),
     ('HOURLY_PRECIP','precipitation_amount',                                'Hourly accumulated precipitation',                    'kg m-2',     {'cell_methods': 'time: sum', 'accumulation_interval': '1 hour'}),
-    ('REFL_COMP',   'equivalent_reflectivity_factor',                      'Column-maximum simulated radar reflectivity',         'dBZ',        {}),
+    ('PRATE_CONV',   'convective_precipitation_flux',                       'Precipitation rate from parameterized convective processes only',      'kg m-2 s-1',        {}),
+    ('PRATE_GRID',   'stratiform_precipitation_flux',                       'Precipitation rate from grid-scale (explicit) processes only',         'kg m-2 s-1',        {}),
+    ('REFL_COMP',   'equivalent_reflectivity_factor',                      'Column-maximum simulated radar reflectivity',                           'dBZ',               {}),
+    ('REFL_2KM',    'equivalent_reflectivity_factor',                      'Simulated radar reflectivity at 2km altitude above sea level',          'dBZ',               {}),
     ('CAPE',        'atmosphere_convective_available_potential_energy',     'Convective Available Potential Energy',               'J kg-1',     {}),
     ('CIN',         'atmosphere_convective_inhibition',                     'Convective Inhibition',                               'J kg-1',     {}),
     ('PBLH',        'atmosphere_boundary_layer_thickness',                  'Planetary boundary layer height',                     'm',          {}),
+    ('W850',        'lagrangian_tendency_of_air_pressure',                  'Vertical velocity (omega) at 850 hPa level',          'Pa s-1',     {}),
+    ('W500',        'lagrangian_tendency_of_air_pressure',                  'Vertical velocity (omega) at 500 hPa level',          'Pa s-1',     {}),
+    ('HELICITY',    '-',                  'Storm-relative helicity integrated over 0-3 km layer',          'm2 s-2',     {}),
+    ('UH_MAX',      '-',                  'Maximum updraft helicity over output interval (2-5 km layer)',  'm2 s-2',     {}),
+    # Tropical Cyclone Events (e.g., MANGKHUT2018)
+    ('WSPD10MAX',   'wind_speed_of_gust',                                   'Maximum 10-m wind speed over output interval',        'm s-1',      {}),
+    ('SLP_MIN',     'air_pressure_at_mean_sea_level',                       'Minimum sea level pressure in model domain',          'Pa',         {}),
+    ('VORT850',     'atmosphere_relative_vorticity',                        'Vertical component of relative vorticity at 850 hPa', 's-1',        {}),
+    ('VORT700',     'atmosphere_relative_vorticity',                        'Vertical component of relative vorticity at 700 hPa', 's-1',        {}),
+    # Heavy Rain/Convective Events (e.g., HRAIN2023, HRAIN2025)
+    ('PRATE_MAX',   'precipitation_flux',                                    'Maximum precipitation rate in model domain',         'kg m-2 s-1', {}),
+    ('FLASH_RATE',  '',                                                      'Simulated lightning flash rate per hour (if available)', 'flashes hour-1', {}),
+    ('IVT',         '',                                                      'Integrated water vapor transport magnitude',         'kg m-1 s-1', {}),
 ]
 
 MANDATORY_3D_VARS = [
@@ -115,7 +132,7 @@ MANDATORY_3D_VARS = [
 RECOMMENDED_3D_VARS = [
     ('THETA', 'air_potential_temperature',                  'Potential temperature on pressure levels',   'K',       {}),
     ('Q',     'specific_humidity',                          'Specific humidity on pressure levels',       'kg kg-1', {}),
-    ('W',     'upward_air_velocity',                        'Vertical velocity on pressure levels',       'm s-1',   {}),
+    ('W',     'upward_air_velocity',                        'Vertical velocity in height coordinates',    'm s-1',   {}),
     ('QC',    'mass_fraction_of_cloud_liquid_water_in_air', 'Cloud liquid water mixing ratio',            'kg kg-1', {}),
     ('QI',    'mass_fraction_of_cloud_ice_in_air',          'Cloud ice mixing ratio',                     'kg kg-1', {}),
     ('QR',    'mass_fraction_of_rain_in_air',               'Rain water mixing ratio',                    'kg kg-1', {}),
