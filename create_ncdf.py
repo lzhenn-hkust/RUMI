@@ -68,11 +68,15 @@ CORE_2D_VARS = [
     ('U10M',        'eastward_wind',                   '10-meter eastward wind component',                'm s-1',      {'height': '10 m'}),
     ('V10M',        'northward_wind',                  '10-meter northward wind component',               'm s-1',      {'height': '10 m'}),
     ('PRATE',       'precipitation_flux',              'Precipitation rate (liquid equivalent)',           'kg m-2 s-1', {}),
-    ('SLP',         'air_pressure_at_mean_sea_level',  'Mean sea level pressure',                         'Pa',         {}),
+    ('SLP',         'air_pressure_at_mean_sea_level',  'Mean sea level pressure',                          'Pa',         {}),
     ('RH2M',        'relative_humidity',               '2-meter relative humidity (fraction 0-1)',         '1',          {'height': '2 m', 'valid_range': np.array([0.0, 1.0], dtype='f4')}),
     ('TOTAL_PRECIP','precipitation_amount',            'Accumulated total precipitation since sim start',  'kg m-2',     {'cell_methods': 'time: sum', 'accumulation_reference': 'simulation_start'}),
     ('PSFC',        'surface_air_pressure',            'Surface atmospheric pressure',                     'Pa',         {}),
     ('Q2M',         'specific_humidity',               '2-meter specific humidity',                        'kg kg-1',    {'height': '2 m'}),
+    ('CWP',         'atmosphere_cloud_liquid_water_content','Column-integrated cloud liquid water path',   'kg m-2',     {}),
+    ('IWP',         'atmosphere_cloud_ice_content',     'Column-integrated cloud ice water path',          'kg m-2',     {}),
+    ('RWP',         'atmosphere_mass_content_of_rain',  'Column-integrated cloud rain water path',         'kg m-2',     {}),
+    ('PW',          'atmosphere_water_vapor_content',   'Precipitable water (total column water vapor)',   'kg m-2',     {}),
 ]
 
 RECOMMENDED_2D_SURFACE_VARS = [
@@ -93,10 +97,6 @@ RECOMMENDED_2D_DIAG_VARS = [
     ('CLDFRAC',     'cloud_area_fraction',                                  'Total cloud fraction (0-1)',                          '1',          {}),
     ('CTH',         'cloud_top_altitude',                                   'Cloud top height above sea level',                    'm',          {}),
     ('CBH',         'cloud_base_altitude',                                  'Cloud base height above sea level',                   'm',          {}),
-    ('CWP',         'atmosphere_cloud_liquid_water_content',                'Column-integrated cloud liquid water path',           'kg m-2',     {}),
-    ('IWP',         'atmosphere_cloud_ice_content',                         'Column-integrated cloud ice water path',              'kg m-2',     {}),
-    ('RWP',         'atmosphere_mass_content_of_rain',                      'Column-integrated cloud rain water path',             'kg m-2',     {}),
-    ('PW',          'atmosphere_water_vapor_content',                       'Precipitable water (total column water vapor)',       'kg m-2',     {}),
     ('HOURLY_PRECIP','precipitation_amount',                                'Hourly accumulated precipitation',                    'kg m-2',     {'cell_methods': 'time: sum', 'accumulation_interval': '1 hour'}),
     ('PRATE_CONV',   'convective_precipitation_flux',                       'Precipitation rate from parameterized convective processes only',      'kg m-2 s-1',        {}),
     ('PRATE_GRID',   'stratiform_precipitation_flux',                       'Precipitation rate from grid-scale (explicit) processes only',         'kg m-2 s-1',        {}),
@@ -126,13 +126,13 @@ MANDATORY_3D_VARS = [
     ('RH',    'relative_humidity',                   'Relative humidity on pressure levels',     '1',      {'valid_range': np.array([0.0, 1.0], dtype='f4')}),
     ('U',     'eastward_wind',                       'Eastward wind on pressure levels',         'm s-1',  {}),
     ('V',     'northward_wind',                      'Northward wind on pressure levels',        'm s-1',  {}),
-    ('OMEGA', 'lagrangian_tendency_of_air_pressure', 'Vertical velocity on pressure levels',    'Pa s-1', {}),
+    ('OMEGA', 'lagrangian_tendency_of_air_pressure', 'Vertical velocity on pressure levels',     'Pa s-1', {}),
+    ('W',     'upward_air_velocity',                 'Vertical velocity in height levels',  'm s-1',   {}),
+    ('Q',     'specific_humidity',                          'Specific humidity on pressure levels',       'kg kg-1', {}),
 ]
 
 RECOMMENDED_3D_VARS = [
     ('THETA', 'air_potential_temperature',                  'Potential temperature on pressure levels',   'K',       {}),
-    ('Q',     'specific_humidity',                          'Specific humidity on pressure levels',       'kg kg-1', {}),
-    ('W',     'upward_air_velocity',                        'Vertical velocity in height coordinates',    'm s-1',   {}),
     ('QC',    'mass_fraction_of_cloud_liquid_water_in_air', 'Cloud liquid water mixing ratio',            'kg kg-1', {}),
     ('QI',    'mass_fraction_of_cloud_ice_in_air',          'Cloud ice mixing ratio',                     'kg kg-1', {}),
     ('QR',    'mass_fraction_of_rain_in_air',               'Rain water mixing ratio',                    'kg kg-1', {}),
