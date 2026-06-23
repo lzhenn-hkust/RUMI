@@ -1,1 +1,8 @@
 *.docx
+__pycache__/
+*.pyc
+portal/data/*.sqlite3
+portal/data/incoming/
+portal/data/submissions/
+portal/backend/data_dir.txt
+portal/backend/whitelist_emails.txt

@@ -1,0 +1,3 @@
+# One email address per line.
+# Copy this file to whitelist_emails.txt on the server and fill it with approved modeler emails.
+modeler@example.edu

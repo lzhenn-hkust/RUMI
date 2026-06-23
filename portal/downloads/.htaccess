@@ -1,0 +1,4 @@
+Options -ExecCGI
+RemoveHandler .py .cgi .pl
+AddType application/octet-stream .nc
+AddType text/x-python .py

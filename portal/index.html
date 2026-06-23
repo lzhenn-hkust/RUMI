@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>RUMI Data Portal</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="assets/hk-grid.svg" alt="" class="brand-mark">
+      <div>
+        <h1>RUMI Data Portal</h1>
+        <p>Phase 1 Hong Kong intercomparison submissions</p>
+      </div>
+    </div>
+    <div class="session">
+      <span id="sessionLabel">Not signed in</span>
+      <button id="logoutBtn" class="ghost hidden" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="authView" class="auth-grid">
+      <form id="loginForm" class="panel">
+        <div class="panel-head">
+          <h2>Sign In</h2>
+          <span class="pill">Approved modelers</span>
+        </div>
+        <label>Email
+          <input name="email" type="email" autocomplete="email" required>
+        </label>
+        <label>Password
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <div id="loginMessage" class="form-message hidden" role="status"></div>
+        <button type="submit" class="primary">Sign in</button>
+      </form>
+
+      <form id="registerForm" class="panel">
+        <div class="panel-head">
+          <h2>Register</h2>
+          <span class="pill">Whitelisted email required</span>
+        </div>
+        <label>Email
+          <input name="email" type="email" autocomplete="email" required>
+        </label>
+        <label>Name
+          <input name="name" autocomplete="name" required>
+        </label>
+        <label>Institution
+          <input name="institution" autocomplete="organization" required>
+        </label>
+        <label>Password
+          <input name="password" type="password" autocomplete="new-password" minlength="10" required>
+        </label>
+        <label>Registration code
+          <input name="registration_code" autocomplete="one-time-code" required>
+        </label>
+        <div id="registerMessage" class="form-message hidden" role="status"></div>
+        <button type="submit" class="secondary">Create account</button>
+      </form>
+
+      <section class="panel resource-panel">
+        <div class="panel-head">
+          <h2>Resources</h2>
+          <span class="pill">Start here</span>
+        </div>
+        <p class="muted">Download the template and helper script before preparing RUMI submissions.</p>
+        <a class="download" href="api.cgi?action=download&amp;file=RUMI_template_2d.nc" download>RUMI_template_2d.nc</a>
+        <a class="download" href="api.cgi?action=download&amp;file=create_ncdf.py" download>create_ncdf.py</a>
+      </section>
+    </section>
+
+    <section id="appView" class="hidden">
+      <nav class="tabs" aria-label="Portal sections">
+        <button class="tab active" type="button" data-tab="uploadTab">Upload</button>
+        <button class="tab" type="button" data-tab="submissionsTab">Submissions</button>
+        <button class="tab admin-only hidden" type="button" data-tab="adminTab">Admin</button>
+        <button class="tab" type="button" data-tab="accountTab">Account</button>
+        <button class="tab" type="button" data-tab="protocolTab">Protocol</button>
+      </nav>
+
+      <section id="uploadTab" class="tab-panel">
+        <form id="uploadForm" class="workspace">
+          <div class="upload-main">
+            <div class="dropzone">
+              <input id="fileInput" name="file" type="file" accept=".nc,.zip,.tar.gz,.tgz" required>
+              <div>
+                <strong>Select submission file</strong>
+                <span>.nc for single snapshots, or .zip/.tar.gz for batch bundles. Archives should contain RUMI-named .nc files and a technical document.</span>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <label>Experiment
+                <select name="experiment" required></select>
+              </label>
+              <label>Event
+                <select name="event" required></select>
+              </label>
+              <label>Model
+                <input name="model" placeholder="WRF, MPAS, UM" required>
+              </label>
+              <label>Forcing data
+                <input name="forcing_data" placeholder="ECMWF ERA5" required>
+              </label>
+              <label>Simulation start time
+                <input name="simulation_start_time" placeholder="2018-09-15T00:00:00Z" required>
+              </label>
+              <label>Initialization time
+                <input name="initialization_time" placeholder="2018-09-15T00:00:00Z" required>
+              </label>
+              <label>Horizontal resolution
+                <input name="horizontal_resolution" placeholder="1 km" required>
+              </label>
+              <label>Version
+                <input name="version" placeholder="v01">
+              </label>
+              <label>Member
+                <input name="member" placeholder="mem01">
+              </label>
+            </div>
+
+            <details class="details">
+              <summary>Model physics and surface metadata</summary>
+              <div class="form-grid">
+                <label>Microphysics
+                  <input name="microphysics_scheme">
+                </label>
+                <label>Cumulus/convection
+                  <input name="cumulus_scheme">
+                </label>
+                <label>PBL scheme
+                  <input name="pbl_scheme">
+                </label>
+                <label>Radiation
+                  <input name="radiation_scheme">
+                </label>
+                <label>Land surface model
+                  <input name="land_surface_scheme">
+                </label>
+                <label>Urban scheme
+                  <input name="urban_scheme">
+                </label>
+                <label>Surface layer
+                  <input name="surface_layer_scheme">
+                </label>
+                <label>Turbulence closure
+                  <input name="turbulence_closure">
+                </label>
+                <label>Landuse dataset
+                  <input name="landuse_dataset">
+                </label>
+                <label>Urban morphology source
+                  <input name="urban_morphology_source">
+                </label>
+                <label>Terrain dataset
+                  <input name="terrain_dataset">
+                </label>
+                <label>Soil dataset
+                  <input name="soil_dataset">
+                </label>
+              </div>
+            </details>
+
+            <label>Technical notes
+              <textarea name="technical_notes" rows="5" placeholder="Initial/boundary conditions, DA or AI methods, spin-up, SST, soil initialization"></textarea>
+            </label>
+
+            <div class="progress-wrap hidden" id="progressWrap">
+              <div class="progress-line">
+                <span id="progressLabel">Preparing upload</span>
+                <span id="progressPct">0%</span>
+              </div>
+              <div class="progress"><span id="progressBar"></span></div>
+            </div>
+
+            <div class="actions">
+              <button class="primary" type="submit">Upload submission</button>
+              <button class="ghost" type="reset">Clear</button>
+            </div>
+          </div>
+
+          <aside class="side-panel">
+            <h3>Required 2D core</h3>
+            <ul id="coreVarList" class="token-list"></ul>
+            <h3>Downloads</h3>
+            <a class="download" href="api.cgi?action=download&amp;file=RUMI_template_2d.nc" download>RUMI_template_2d.nc</a>
+            <a class="download" href="api.cgi?action=download&amp;file=create_ncdf.py" download>create_ncdf.py</a>
+          </aside>
+        </form>
+      </section>
+
+      <section id="submissionsTab" class="tab-panel hidden">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Submissions</h2>
+            <button id="refreshUploadsBtn" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Event</th>
+                  <th>Model</th>
+                  <th>Status</th>
+                  <th>Validation</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody id="uploadsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="adminTab" class="tab-panel hidden">
+        <div class="admin-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Modelers</h2>
+              <button id="refreshAdminBtn" class="ghost" type="button">Refresh</button>
+            </div>
+            <form id="createUserForm" class="inline-form">
+              <input name="email" type="email" placeholder="email" required>
+              <input name="name" placeholder="name" required>
+              <input name="institution" placeholder="institution" required>
+              <select name="role">
+                <option value="modeler">modeler</option>
+                <option value="admin">admin</option>
+              </select>
+              <button type="submit" class="secondary">Add</button>
+            </form>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Institution</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="usersBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Email Whitelist</h2>
+            <form id="whitelistForm" class="stack">
+              <textarea name="emails" rows="8" placeholder="one email per line"></textarea>
+              <button class="secondary" type="submit">Add emails</button>
+            </form>
+            <div id="whitelistCount" class="muted"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="accountTab" class="tab-panel hidden">
+        <form id="passwordForm" class="panel stack">
+          <div class="panel-head">
+            <h2>Account</h2>
+            <span class="pill">Password</span>
+          </div>
+          <label>Current password
+            <input name="current_password" type="password" autocomplete="current-password" required>
+          </label>
+          <label>New password
+            <input name="new_password" type="password" autocomplete="new-password" minlength="10" required>
+          </label>
+          <button class="secondary" type="submit">Change password</button>
+        </form>
+      </section>
+
+      <section id="protocolTab" class="tab-panel hidden">
+        <div class="protocol-grid">
+          <section class="panel">
+            <h2>Events</h2>
+            <div id="eventList" class="event-list"></div>
+          </section>
+          <section class="panel">
+            <h2>Format</h2>
+            <dl class="spec-list">
+              <dt>Grid</dt><dd>regular lat/lon, 15 arc-sec, 111 x 152</dd>
+              <dt>Frequency</dt><dd>hourly minimum, one time snapshot per file</dd>
+              <dt>Format</dt><dd>NetCDF4, CF-1.8, _FillValue = -9999.0</dd>
+              <dt>Name</dt><dd>RUMI-&lt;Experiment&gt;-&lt;Model&gt;-&lt;Event&gt;-&lt;YYYYMMDDHHMMSS&gt;.nc</dd>
+              <dt>3D fields</dt><dd>recommended to archive; not required for current submission stage</dd>
+            </dl>
+          </section>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="assets/app.js?v=20260623-fix3"></script>
+</body>
+</html>
