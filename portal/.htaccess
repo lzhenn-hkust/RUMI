@@ -1,0 +1,11 @@
+Options +ExecCGI -Indexes
+AddHandler cgi-script .cgi
+DirectoryIndex index.html
+
+AddType application/x-netcdf .nc
+AddType application/gzip .gz
+
+<FilesMatch "^\.">
+  Order allow,deny
+  Deny from all
+</FilesMatch>

@@ -29,7 +29,7 @@ All participating models must interpolate their output onto the following unifie
 | PSFC | Surface pressure | Pa |
 | Q2M | 2-m specific humidity | kg/kg |
 
-### 3D Pressure-Level Variables (Mandatory)
+### 3D Pressure-Level Variables (Recommend to archive, not required to submit in current stage)
 
 18 standard pressure levels: 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50 hPa
 

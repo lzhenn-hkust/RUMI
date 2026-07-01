@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Hong Kong model grid">
+  <rect width="120" height="120" rx="18" fill="#0f2f3a"/>
+  <path d="M18 78 C31 67, 42 72, 54 62 C64 54, 72 58, 84 48 C92 41, 101 42, 108 34" fill="none" stroke="#67d5c2" stroke-width="5" stroke-linecap="round"/>
+  <path d="M21 87 C35 82, 42 89, 56 80 C68 72, 80 78, 98 66" fill="none" stroke="#f2b84b" stroke-width="4" stroke-linecap="round"/>
+  <g stroke="#d8edf0" stroke-opacity=".28" stroke-width="1">
+    <path d="M24 18 V102"/>
+    <path d="M42 18 V102"/>
+    <path d="M60 18 V102"/>
+    <path d="M78 18 V102"/>
+    <path d="M96 18 V102"/>
+    <path d="M18 24 H102"/>
+    <path d="M18 42 H102"/>
+    <path d="M18 60 H102"/>
+    <path d="M18 78 H102"/>
+    <path d="M18 96 H102"/>
+  </g>
+  <circle cx="82" cy="48" r="5" fill="#f6fbfb"/>
+</svg>
