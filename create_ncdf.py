@@ -5,7 +5,7 @@ Phase 1: Hong Kong
 
 This script creates a properly formatted NetCDF4 output file conforming to
 the RUMI protocol specifications. It demonstrates:
-  - The standard output grid (15 arc-second regular lat/lon over Hong Kong)
+  - The standard output grid (300 m regular lat/lon over Hong Kong)
   - Required variable names, attributes, and metadata structure
   - Correct handling of coordinate systems, time encoding, and CF conventions
 
@@ -22,7 +22,7 @@ Usage:
 
 Changelog:
   v2.0 (2026-03-30): Complete rewrite for RUMI protocol. 2D gridded output
-                      on standard 15 arc-sec lat/lon grid. Single-frame files.
+                      on standard 300 m lat/lon grid. Single-frame files.
 '''
 
 __title__   = 'RUMI NetCDF creation script'
@@ -43,20 +43,15 @@ GRID = {
     'lat_north': 22.58,
     'lon_west':  113.82,
     'lon_east':  114.45,
-    'resolution_arcsec': 15,  # 15 arc-seconds ≈ 0.004167°
+    'resolution_m': 300,
 }
-GRID['dlat'] = GRID['resolution_arcsec'] / 3600.0
-GRID['dlon'] = GRID['resolution_arcsec'] / 3600.0
-GRID['lats'] = np.arange(GRID['lat_south'], GRID['lat_north'], GRID['dlat'])
-GRID['lons'] = np.arange(GRID['lon_west'],  GRID['lon_east'],  GRID['dlon'])
-GRID['nlat'] = len(GRID['lats'])  # 111
-GRID['nlon'] = len(GRID['lons'])  # 152
+GRID['nlon'] = 234
+GRID['nlat'] = 171
+GRID['lats'] = np.linspace(GRID['lat_south'], GRID['lat_north'], GRID['nlat'])
+GRID['lons'] = np.linspace(GRID['lon_west'],  GRID['lon_east'],  GRID['nlon'])
 
 # Standard pressure levels (Pa) for 3D output
-PRESSURE_LEVELS = np.array([
-    100000, 97500, 95000, 92500, 90000, 85000, 80000, 70000,
-    60000, 50000, 40000, 30000, 25000, 20000, 15000, 10000, 7000, 5000
-], dtype=np.float32)
+PRESSURE_LEVELS = np.array([85000, 50000, 20000], dtype=np.float64)
 
 # ============================================================================
 # Variable Definitions
@@ -68,15 +63,11 @@ CORE_2D_VARS = [
     ('U10M',        'eastward_wind',                   '10-meter eastward wind component',                'm s-1',      {'height': '10 m'}),
     ('V10M',        'northward_wind',                  '10-meter northward wind component',               'm s-1',      {'height': '10 m'}),
     ('PRATE',       'precipitation_flux',              'Precipitation rate (liquid equivalent)',           'kg m-2 s-1', {}),
-    ('SLP',         'air_pressure_at_mean_sea_level',  'Mean sea level pressure',                          'Pa',         {}),
+    ('SLP',         'air_pressure_at_mean_sea_level',  'Mean sea level pressure',                         'Pa',         {}),
     ('RH2M',        'relative_humidity',               '2-meter relative humidity (fraction 0-1)',         '1',          {'height': '2 m', 'valid_range': np.array([0.0, 1.0], dtype='f4')}),
     ('TOTAL_PRECIP','precipitation_amount',            'Accumulated total precipitation since sim start',  'kg m-2',     {'cell_methods': 'time: sum', 'accumulation_reference': 'simulation_start'}),
     ('PSFC',        'surface_air_pressure',            'Surface atmospheric pressure',                     'Pa',         {}),
     ('Q2M',         'specific_humidity',               '2-meter specific humidity',                        'kg kg-1',    {'height': '2 m'}),
-    ('CWP',         'atmosphere_cloud_liquid_water_content','Column-integrated cloud liquid water path',   'kg m-2',     {}),
-    ('IWP',         'atmosphere_cloud_ice_content',     'Column-integrated cloud ice water path',          'kg m-2',     {}),
-    ('RWP',         'atmosphere_mass_content_of_rain',  'Column-integrated cloud rain water path',         'kg m-2',     {}),
-    ('PW',          'atmosphere_water_vapor_content',   'Precipitable water (total column water vapor)',   'kg m-2',     {}),
 ]
 
 RECOMMENDED_2D_SURFACE_VARS = [
@@ -97,11 +88,15 @@ RECOMMENDED_2D_DIAG_VARS = [
     ('CLDFRAC',     'cloud_area_fraction',                                  'Total cloud fraction (0-1)',                          '1',          {}),
     ('CTH',         'cloud_top_altitude',                                   'Cloud top height above sea level',                    'm',          {}),
     ('CBH',         'cloud_base_altitude',                                  'Cloud base height above sea level',                   'm',          {}),
+    ('CWP',         'atmosphere_cloud_liquid_water_content',                'Column-integrated cloud liquid water path',           'kg m-2',     {}),
+    ('IWP',         'atmosphere_cloud_ice_content',                         'Column-integrated cloud ice water path',              'kg m-2',     {}),
+    ('RWP',         'atmosphere_mass_content_of_rain',                      'Column-integrated cloud rain water path',             'kg m-2',     {}),
+    ('PW',          'atmosphere_water_vapor_content',                       'Precipitable water (total column water vapor)',       'kg m-2',     {}),
     ('HOURLY_PRECIP','precipitation_amount',                                'Hourly accumulated precipitation',                    'kg m-2',     {'cell_methods': 'time: sum', 'accumulation_interval': '1 hour'}),
-    ('PRATE_CONV',   'convective_precipitation_flux',                       'Precipitation rate from parameterized convective processes only',      'kg m-2 s-1',        {}),
+    ('PRATE_CONV',   'convective_precipitation_flux',                       'Precipitation rate from parameterized convective processes only',         'kg m-2 s-1',        {}),
     ('PRATE_GRID',   'stratiform_precipitation_flux',                       'Precipitation rate from grid-scale (explicit) processes only',         'kg m-2 s-1',        {}),
-    ('REFL_COMP',   'equivalent_reflectivity_factor',                      'Column-maximum simulated radar reflectivity',                           'dBZ',               {}),
-    ('REFL_2KM',    'equivalent_reflectivity_factor',                      'Simulated radar reflectivity at 2km altitude above sea level',          'dBZ',               {}),
+    ('REFL_COMP',   'equivalent_reflectivity_factor',                      'Column-maximum simulated radar reflectivity',         'dBZ',        {}),
+    ('REFL_2KM',    'equivalent_reflectivity_factor',                      'Simulated radar reflectivity at 2 km altitude above sea level',         'dBZ',        {}),
     ('CAPE',        'atmosphere_convective_available_potential_energy',     'Convective Available Potential Energy',               'J kg-1',     {}),
     ('CIN',         'atmosphere_convective_inhibition',                     'Convective Inhibition',                               'J kg-1',     {}),
     ('PBLH',        'atmosphere_boundary_layer_thickness',                  'Planetary boundary layer height',                     'm',          {}),
@@ -109,15 +104,6 @@ RECOMMENDED_2D_DIAG_VARS = [
     ('W500',        'lagrangian_tendency_of_air_pressure',                  'Vertical velocity (omega) at 500 hPa level',          'Pa s-1',     {}),
     ('HELICITY',    '-',                  'Storm-relative helicity integrated over 0-3 km layer',          'm2 s-2',     {}),
     ('UH_MAX',      '-',                  'Maximum updraft helicity over output interval (2-5 km layer)',  'm2 s-2',     {}),
-    # Tropical Cyclone Events (e.g., MANGKHUT2018)
-    ('WSPD10MAX',   'wind_speed_of_gust',                                   'Maximum 10-m wind speed over output interval',        'm s-1',      {}),
-    ('SLP_MIN',     'air_pressure_at_mean_sea_level',                       'Minimum sea level pressure in model domain',          'Pa',         {}),
-    ('VORT850',     'atmosphere_relative_vorticity',                        'Vertical component of relative vorticity at 850 hPa', 's-1',        {}),
-    ('VORT700',     'atmosphere_relative_vorticity',                        'Vertical component of relative vorticity at 700 hPa', 's-1',        {}),
-    # Heavy Rain/Convective Events (e.g., HRAIN2023, HRAIN2025)
-    ('PRATE_MAX',   'precipitation_flux',                                    'Maximum precipitation rate in model domain',         'kg m-2 s-1', {}),
-    ('FLASH_RATE',  '',                                                      'Simulated lightning flash rate per hour (if available)', 'flashes hour-1', {}),
-    ('IVT',         '',                                                      'Integrated water vapor transport magnitude',         'kg m-1 s-1', {}),
 ]
 
 MANDATORY_3D_VARS = [
@@ -126,13 +112,13 @@ MANDATORY_3D_VARS = [
     ('RH',    'relative_humidity',                   'Relative humidity on pressure levels',     '1',      {'valid_range': np.array([0.0, 1.0], dtype='f4')}),
     ('U',     'eastward_wind',                       'Eastward wind on pressure levels',         'm s-1',  {}),
     ('V',     'northward_wind',                      'Northward wind on pressure levels',        'm s-1',  {}),
-    ('OMEGA', 'lagrangian_tendency_of_air_pressure', 'Vertical velocity on pressure levels',     'Pa s-1', {}),
-    ('W',     'upward_air_velocity',                 'Vertical velocity in height levels',  'm s-1',   {}),
-    ('Q',     'specific_humidity',                          'Specific humidity on pressure levels',       'kg kg-1', {}),
+    ('OMEGA', 'lagrangian_tendency_of_air_pressure', 'Vertical velocity on pressure levels',    'Pa s-1', {}),
 ]
 
 RECOMMENDED_3D_VARS = [
     ('THETA', 'air_potential_temperature',                  'Potential temperature on pressure levels',   'K',       {}),
+    ('Q',     'specific_humidity',                          'Specific humidity on pressure levels',       'kg kg-1', {}),
+    ('W',     'upward_air_velocity',                        'Vertical velocity in height coordinates',    'm s-1',   {}),
     ('QC',    'mass_fraction_of_cloud_liquid_water_in_air', 'Cloud liquid water mixing ratio',            'kg kg-1', {}),
     ('QI',    'mass_fraction_of_cloud_ice_in_air',          'Cloud ice mixing ratio',                     'kg kg-1', {}),
     ('QR',    'mass_fraction_of_rain_in_air',               'Rain water mixing ratio',                    'kg kg-1', {}),
@@ -147,7 +133,7 @@ def set_info():
     '''Set experiment metadata. Update this for your simulation.'''
     info = {
         # Experiment identification
-        'experiment':       'RUMI-ERA5',
+        'experiment':       'RUMI-ERA5-AN',
         'event':            'MANGKHUT2018',
         'event_name':       'Typhoon Mangkhut (2018)',
         'model':            'WRF',
@@ -155,11 +141,14 @@ def set_info():
         # Simulation timing (ISO 8601)
         'simulation_start_time':        '2018-09-15T00:00:00Z',
         'initialization_time':          '2018-09-15T00:00:00Z',
-        'forecast_initialization_time': '2018-09-15T00:00:00Z',
-        'forecast_lead_time_hours':     '0',
+        'forecast_initialization_time': '',
+        'forecast_lead_time_hours':     '',
 
         # Forcing data
-        'forcing_data':     'ECMWF ERA5',
+        'forcing_mode':         'analysis',
+        'forcing_source':       'ERA5',
+        'forcing_data':         'ECMWF ERA5 reanalysis',
+        'forcing_data_version': 'v5',
 
         # Model configuration
         'horizontal_resolution': '1 km',
@@ -194,7 +183,7 @@ def set_info():
 
     # Construct filename following RUMI convention
     info['fname'] = (
-        f"RUMI-{info['experiment'].split('-')[1]}-{info['model']}"
+        f"{info['experiment']}-{info['model']}"
         f"-{info['event']}-{info['timestamp']}.nc"
     )
 
@@ -269,7 +258,7 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
 
         # ---- Pressure levels (if 3D) ----
         if include_3d:
-            p = ds.createVariable('pressure', 'f4', ('pressure',))
+            p = ds.createVariable('pressure', 'f8', ('pressure',))
             p.long_name     = 'pressure'
             p.standard_name = 'air_pressure'
             p.units         = 'Pa'
@@ -285,19 +274,21 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
         lm.units         = '1'
         lm.flag_values   = np.array([0, 1], dtype='f4')
         lm.flag_meanings = 'water land'
+        lm.coordinates   = 'lat lon'
 
         hgt = ds.createVariable('HGT', 'f4', ('lat', 'lon'),
                                 fill_value=MISSING_FLOAT, zlib=True)
         hgt.long_name     = 'model terrain height'
         hgt.standard_name = 'surface_altitude'
         hgt.units         = 'm'
+        hgt.coordinates   = 'lat lon'
 
         # ---- Helper to create 2D variable ----
         def _add_2d_var(name, std_name, long_name, units, extra):
             v = ds.createVariable(name, 'f4', ('time', 'lat', 'lon'),
                                   fill_value=MISSING_FLOAT, zlib=True)
             v.long_name     = long_name
-            if std_name:
+            if std_name and std_name != '-':
                 v.standard_name = std_name
             v.units         = units
             v.coordinates   = 'lat lon'
@@ -310,7 +301,7 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
             v = ds.createVariable(name, 'f4', ('time', 'pressure', 'lat', 'lon'),
                                   fill_value=MISSING_FLOAT, zlib=True)
             v.long_name     = long_name
-            if std_name:
+            if std_name and std_name != '-':
                 v.standard_name = std_name
             v.units              = units
             v.coordinates        = 'lat lon pressure'
@@ -348,7 +339,7 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
         ds.history      = (f"Created {info['creation_date']} with "
                            f"{__title__} {__version__}")
         ds.references   = 'RUMI Protocol v1.2 (2026)'
-        ds.comment      = 'Example output file — replace with actual model data'
+        ds.comment      = 'Example output file - replace with actual model data'
 
         # RUMI-specific
         ds.experiment                   = info['experiment']
@@ -356,9 +347,13 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
         ds.event_name                   = info['event_name']
         ds.simulation_start_time        = info['simulation_start_time']
         ds.initialization_time          = info['initialization_time']
-        ds.forecast_initialization_time = info['forecast_initialization_time']
-        ds.forecast_lead_time_hours     = info['forecast_lead_time_hours']
+        if info['forcing_mode'] == 'forecast':
+            ds.forecast_initialization_time = info['forecast_initialization_time']
+            ds.forecast_lead_time_hours     = info['forecast_lead_time_hours']
+        ds.forcing_mode                 = info['forcing_mode']
+        ds.forcing_source               = info['forcing_source']
         ds.forcing_data                 = info['forcing_data']
+        ds.forcing_data_version         = info['forcing_data_version']
         ds.horizontal_resolution        = info['horizontal_resolution']
         ds.vertical_levels              = info['vertical_levels']
         ds.model_top_pressure           = info['model_top_pressure']
@@ -385,7 +380,7 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
 
         # Output grid documentation
         ds.output_grid_type       = 'regular lat/lon'
-        ds.output_grid_resolution = '15 arc-seconds (~0.004167 degrees)'
+        ds.output_grid_resolution = '300 m'
         ds.output_grid_lat_range  = f"{GRID['lat_south']}N to {GRID['lat_north']}N"
         ds.output_grid_lon_range  = f"{GRID['lon_west']}E to {GRID['lon_east']}E"
         ds.output_grid_dimensions = f"{GRID['nlon']} x {GRID['nlat']} (lon x lat)"
@@ -415,7 +410,7 @@ def fill_example_data(fpath):
         ds.variables['LANDMASK'][:] = rng.choice([0, 1], size=(nlat, nlon), p=[0.4, 0.6]).astype('f4')
         ds.variables['HGT'][:] = rng.uniform(0, 500, size=(nlat, nlon)).astype('f4')
 
-        # Core 2D — example values
+        # Core 2D example values
         ds.variables['T2M'][0]         = rng.uniform(295, 310, (nlat, nlon)).astype('f4')
         ds.variables['U10M'][0]        = rng.uniform(-20, 20, (nlat, nlon)).astype('f4')
         ds.variables['V10M'][0]        = rng.uniform(-20, 20, (nlat, nlon)).astype('f4')
@@ -456,7 +451,7 @@ def main():
     print(f'Output grid: {GRID["nlon"]} x {GRID["nlat"]} '
           f'({GRID["lon_west"]}-{GRID["lon_east"]}E, '
           f'{GRID["lat_south"]}-{GRID["lat_north"]}N), '
-          f'15 arc-sec resolution')
+          f'300 m resolution')
 
     info = set_info()
     fpath = create_rumi_netcdf(info, include_recommended=True, include_3d=True)
