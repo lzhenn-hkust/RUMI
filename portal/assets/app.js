@@ -258,12 +258,21 @@ async function submitRegister(event) {
 }
 
 async function logout() {
-  await api("logout", {});
-  state.user = null;
-  state.uploads = [];
-  state.adminLoaded = false;
-  setView();
-  toast("Signed out");
+  const button = $("#logoutBtn");
+  button.disabled = true;
+  try {
+    await api("logout", {});
+    state.user = null;
+    state.uploads = [];
+    state.adminLoaded = false;
+    activateTab("uploadTab");
+    setView();
+    toast("Signed out");
+  } catch (err) {
+    toast(err.message || "Could not sign out", "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function parseFileName(name) {

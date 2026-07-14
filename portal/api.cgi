@@ -118,15 +118,18 @@ def csrf_cookie(token, clear=False):
 
 
 def send_json(payload, status=200, cookies=None):
+    body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
     print(f"Status: {status} {STATUS_TEXT.get(status, 'OK')}")
     print("Content-Type: application/json; charset=utf-8")
+    print(f"Content-Length: {len(body)}")
     print("X-Content-Type-Options: nosniff")
     print("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'")
     print("Cache-Control: no-store")
     for cookie in cookies or []:
         print("Set-Cookie: " + cookie)
     print()
-    print(json.dumps(payload, ensure_ascii=True))
+    sys.stdout.flush()
+    sys.stdout.buffer.write(body)
 
 
 def send_file(path, download_name, content_type):
