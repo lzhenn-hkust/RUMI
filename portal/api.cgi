@@ -392,6 +392,7 @@ def handle_login(con):
 
 
 def handle_logout(con):
+    read_json()
     destroy_session(con, request_cookie("rumi_session"))
     return {"payload": {"ok": True}, "cookies": [session_cookie("", clear=True), csrf_cookie("", clear=True)]}
 
