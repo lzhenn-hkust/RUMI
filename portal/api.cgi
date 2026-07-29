@@ -11,7 +11,9 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR / "backend"))
 
 from portal_lib import (  # noqa: E402
+    ACCEPTED_UPLOAD_STATUSES,
     DATA_DIR,
+    INACTIVE_UPLOAD_STATUSES,
     INCOMING_DIR,
     LOG_DIR,
     MAX_CHUNK_BYTES,
@@ -533,12 +535,39 @@ def handle_upload_start(con):
         raise PortalError(400, "User storage quota would be exceeded.")
     kind = file_kind(file_name)
     metadata = metadata_from_payload(payload)
+    requested_replacement = clean_text(payload.get("replace_upload_id"), 80)
     if metadata["event"] not in constants_payload()["events"]:
         raise PortalError(400, "Select a valid RUMI event.")
     if not metadata["experiment"] or not metadata["model"]:
         raise PortalError(400, "Experiment and model are required.")
     parsed = parse_rumi_filename(file_name) if kind == "netcdf" else None
     timestamp_utc = parsed["timestamp"] if parsed else None
+    inactive_placeholders = ", ".join("?" for _ in INACTIVE_UPLOAD_STATUSES)
+    existing = con.execute(
+        f"""
+        SELECT * FROM uploads
+        WHERE user_id = ? AND file_name = ?
+          AND status NOT IN ({inactive_placeholders})
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (user["id"], file_name, *INACTIVE_UPLOAD_STATUSES),
+    ).fetchone()
+    if existing and requested_replacement != existing["upload_id"]:
+        raise PortalError(
+            409,
+            "A submission with this file name already exists.",
+            {
+                "code": "duplicate_filename",
+                "existing": upload_record_public(existing),
+            },
+        )
+    if requested_replacement and not existing:
+        raise PortalError(
+            409,
+            "The submission selected for replacement is no longer active. Refresh and try again.",
+            {"code": "replacement_stale"},
+        )
     upload_id = new_token()[:22]
     temp_path = INCOMING_DIR / (upload_id + ".part")
     now = utcnow()
@@ -547,9 +576,9 @@ def handle_upload_start(con):
         INSERT INTO uploads(
             upload_id, user_id, file_name, file_size, received_bytes, file_kind,
             status, experiment, model, event, timestamp_utc, member, version,
-            metadata_json, temp_path, created_at, updated_at
+            metadata_json, temp_path, replaces_upload_id, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, 0, ?, 'receiving', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, 0, ?, 'receiving', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             upload_id,
@@ -565,6 +594,7 @@ def handle_upload_start(con):
             metadata["version"],
             json.dumps(metadata, ensure_ascii=True),
             str(temp_path),
+            existing["upload_id"] if existing else None,
             now,
             now,
         ),
@@ -612,8 +642,16 @@ def handle_upload_finish(con):
     row = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
     if not row or row["user_id"] != user["id"]:
         raise PortalError(404, "Upload not found.")
+    terminal_statuses = set(INACTIVE_UPLOAD_STATUSES) | set(ACCEPTED_UPLOAD_STATUSES)
+    inactive_placeholders = ", ".join("?" for _ in INACTIVE_UPLOAD_STATUSES)
+    if row["status"] in terminal_statuses:
+        return {"ok": True, "upload": upload_record_public(row)}
+    if row["status"] not in ("receiving", "validating"):
+        raise PortalError(409, "Upload is not ready for validation.")
     if int(row["received_bytes"]) != int(row["file_size"]):
         raise PortalError(409, "Upload is incomplete.")
+    if not row["temp_path"]:
+        raise PortalError(409, "Temporary upload file is no longer available.")
     temp_path = Path(row["temp_path"])
     if not temp_path.exists():
         raise PortalError(404, "Temporary upload file is missing.")
@@ -630,7 +668,10 @@ def handle_upload_finish(con):
     except Exception as exc:
         request_id = log_exception(exc)
         validation = {
-            "errors": [f"Validation failed unexpectedly. Reference: {request_id}"],
+            "errors": [
+                "The server could not validate this file. "
+                f"No submission was accepted. Reference: {request_id}"
+            ],
             "warnings": [],
             "summary": {},
         }
@@ -638,7 +679,7 @@ def handle_upload_finish(con):
         con.execute(
             """
             UPDATE uploads
-            SET status = 'failed', validation_json = ?, updated_at = ?
+            SET status = 'server_error', validation_json = ?, updated_at = ?
             WHERE upload_id = ?
             """,
             (json.dumps(validation, ensure_ascii=True), now, upload_id),
@@ -646,36 +687,127 @@ def handle_upload_finish(con):
         con.commit()
         record = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
         return {"ok": True, "upload": upload_record_public(record)}
+
+    if validation.get("errors"):
+        now = utcnow()
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'rejected', sha256 = ?, validation_json = ?, updated_at = ?
+            WHERE upload_id = ?
+            """,
+            (
+                digest,
+                json.dumps(validation, ensure_ascii=True),
+                now,
+                upload_id,
+            ),
+        )
+        con.commit()
+        record = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
+        return {"ok": True, "upload": upload_record_public(record)}
+
+    accepted_placeholders = ", ".join("?" for _ in ACCEPTED_UPLOAD_STATUSES)
+    duplicate = con.execute(
+        f"""
+        SELECT * FROM uploads
+        WHERE user_id = ? AND sha256 = ? AND id != ?
+          AND status IN ({accepted_placeholders})
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (user["id"], digest, row["id"], *ACCEPTED_UPLOAD_STATUSES),
+    ).fetchone()
+    if duplicate:
+        validation["errors"] = [
+            f"Identical file content was already accepted as {duplicate['file_name']}."
+        ]
+        validation.setdefault("summary", {})["duplicate_upload_id"] = duplicate["upload_id"]
+        remove_upload_files(row)
+        now = utcnow()
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'duplicate', temp_path = NULL, sha256 = ?,
+                validation_json = ?, updated_at = ?
+            WHERE upload_id = ?
+            """,
+            (
+                digest,
+                json.dumps(validation, ensure_ascii=True),
+                now,
+                upload_id,
+            ),
+        )
+        con.commit()
+        record = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
+        return {"ok": True, "upload": upload_record_public(record)}
+
     final_dir = (
         SUBMISSIONS_DIR
         / slugify(user["institution"])
         / slugify(row["model"])
         / row["event"]
     )
-    final_dir.mkdir(parents=True, exist_ok=True)
     final_path = final_dir / (row["upload_id"] + "_" + safe_file_name(row["file_name"]))
-    temp_path.replace(final_path)
-    status = "validated" if not validation.get("errors") else "needs_review"
-    if row["file_kind"] in ("zip", "tar") and not validation.get("errors"):
-        status = "received_manual_review"
-    now = utcnow()
-    con.execute(
-        """
-        UPDATE uploads
-        SET status = ?, stored_path = ?, temp_path = NULL, sha256 = ?,
-            validation_json = ?, updated_at = ?
-        WHERE upload_id = ?
-        """,
-        (
-            status,
-            str(final_path),
-            digest,
-            json.dumps(validation, ensure_ascii=True),
-            now,
-            upload_id,
-        ),
-    )
-    con.commit()
+    status = "received_manual_review" if row["file_kind"] in ("zip", "tar") else "validated"
+    try:
+        final_dir.mkdir(parents=True, exist_ok=True)
+        temp_path.replace(final_path)
+        now = utcnow()
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = ?, stored_path = ?, temp_path = NULL, sha256 = ?,
+                validation_json = ?, updated_at = ?
+            WHERE upload_id = ?
+            """,
+            (
+                status,
+                str(final_path),
+                digest,
+                json.dumps(validation, ensure_ascii=True),
+                now,
+                upload_id,
+            ),
+        )
+        if row["replaces_upload_id"]:
+            con.execute(
+                f"""
+                UPDATE uploads
+                SET status = 'superseded', updated_at = ?
+                WHERE upload_id = ? AND user_id = ?
+                  AND status NOT IN ({inactive_placeholders})
+                """,
+                (
+                    now,
+                    row["replaces_upload_id"],
+                    user["id"],
+                    *INACTIVE_UPLOAD_STATUSES,
+                ),
+            )
+        con.commit()
+    except Exception as exc:
+        request_id = log_exception(exc)
+        validation["errors"] = [
+            "The file passed validation, but the server could not finalize it. "
+            f"No submission was accepted. Reference: {request_id}"
+        ]
+        now = utcnow()
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'server_error', sha256 = ?, validation_json = ?, updated_at = ?
+            WHERE upload_id = ?
+            """,
+            (
+                digest,
+                json.dumps(validation, ensure_ascii=True),
+                now,
+                upload_id,
+            ),
+        )
+        con.commit()
     record = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
     return {"ok": True, "upload": upload_record_public(record)}
 

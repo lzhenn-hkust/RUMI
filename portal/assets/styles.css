@@ -183,6 +183,38 @@ main {
   color: var(--red);
 }
 
+.upload-result {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 16px;
+  border: 1px solid #e4cf9d;
+  border-radius: 8px;
+  padding: 13px 15px;
+  background: #fff8e8;
+  color: #73500f;
+}
+
+.upload-result.success {
+  border-color: #a9d8ce;
+  background: #edf9f6;
+  color: var(--teal-dark);
+}
+
+.upload-result.error {
+  border-color: #efc6c6;
+  background: #fff0f0;
+  color: var(--red);
+}
+
+.upload-result span {
+  overflow-wrap: anywhere;
+}
+
+.upload-result ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
 .status.needs_review,
 .status.pending,
 .status.receiving,
@@ -194,9 +226,17 @@ main {
 
 .status.deleted,
 .status.disabled,
-.status.failed {
+.status.duplicate,
+.status.failed,
+.status.rejected,
+.status.server_error {
   background: #f6dddd;
   color: var(--red);
+}
+
+.status.superseded {
+  background: #e8ecee;
+  color: #526067;
 }
 
 label {

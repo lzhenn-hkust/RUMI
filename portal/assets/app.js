@@ -60,7 +60,10 @@ async function api(action, payload = null, options = {}) {
   const response = await fetch(`api.cgi?action=${encodeURIComponent(action)}`, init);
   const data = await response.json().catch(() => ({ok: false, error: "Invalid server response"}));
   if (!response.ok || data.ok === false) {
-    throw new Error(data.error || `Request failed with ${response.status}`);
+    const error = new Error(data.error || `Request failed with ${response.status}`);
+    error.status = response.status;
+    error.details = data.details || {};
+    throw error;
   }
   return data;
 }
@@ -86,6 +89,7 @@ function setView() {
   $("#authView").classList.toggle("hidden", signedIn);
   $("#appView").classList.toggle("hidden", !signedIn);
   $("#logoutBtn").classList.toggle("hidden", !signedIn);
+  if (!signedIn) $("#uploadResult").classList.add("hidden");
   $("#sessionLabel").textContent = signedIn
     ? `${state.user.name} · ${state.user.institution}`
     : "Not signed in";
@@ -163,7 +167,7 @@ function validationDetails(validation) {
 
 function statusPill(status) {
   const safeStatus = String(status || "").replace(/[^a-z0-9_-]/gi, "");
-  return `<span class="status ${escapeHtml(safeStatus)}">${escapeHtml(String(status || "").replace("_", " "))}</span>`;
+  return `<span class="status ${escapeHtml(safeStatus)}">${escapeHtml(String(status || "").replace(/_/g, " "))}</span>`;
 }
 
 async function loadMe() {
@@ -190,6 +194,7 @@ async function loadUploads() {
     </tr>`;
   });
   $("#uploadsBody").innerHTML = rows.join("") || `<tr><td colspan="6" class="muted">No submissions yet.</td></tr>`;
+  return data.uploads;
 }
 
 async function loadAdmin() {
@@ -311,6 +316,82 @@ function setProgress(done, total, label) {
   $("#progressBar").style.width = `${Math.min(100, pct)}%`;
 }
 
+function showUploadMessage(title, message, type = "warning", errors = []) {
+  const result = $("#uploadResult");
+  const details = errors.length
+    ? `<ul>${errors.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+    : "";
+  result.className = `upload-result ${type}`;
+  result.innerHTML = `<strong>${escapeHtml(title)}</strong><span>${escapeHtml(message)}</span>${details}`;
+}
+
+function showUploadOutcome(upload) {
+  const errors = upload.validation?.errors || [];
+  const status = upload.status;
+  if (status === "validated") {
+    showUploadMessage(
+      "Submission accepted",
+      `${upload.file_name} passed validation and is now stored as the active submission.`,
+      "success",
+    );
+    setProgress(upload.file_size, upload.file_size, "Accepted");
+    return;
+  }
+  if (status === "received_manual_review") {
+    showUploadMessage(
+      "Upload received",
+      `${upload.file_name} was stored and is awaiting manual archive review.`,
+      "warning",
+    );
+    setProgress(upload.file_size, upload.file_size, "Manual review");
+    return;
+  }
+  if (status === "rejected") {
+    showUploadMessage(
+      "Submission rejected",
+      "The file was transferred to staging but was not accepted. Correct the issues below and upload it again.",
+      "error",
+      errors,
+    );
+    setProgress(upload.file_size, upload.file_size, "Rejected");
+    return;
+  }
+  if (status === "duplicate") {
+    showUploadMessage(
+      "Duplicate not accepted",
+      "Identical file content has already been accepted. No second submission was created.",
+      "error",
+      errors,
+    );
+    setProgress(upload.file_size, upload.file_size, "Duplicate");
+    return;
+  }
+  if (status === "server_error" || status === "failed") {
+    showUploadMessage(
+      "Submission not accepted",
+      "The file reached the server, but processing could not be completed. The reference below can be used by the administrator.",
+      "error",
+      errors,
+    );
+    setProgress(upload.file_size, upload.file_size, "Server error");
+    return;
+  }
+  showUploadMessage(
+    "Upload status pending",
+    `The file was transferred, but its current status is ${status}. Refresh Submissions before uploading it again.`,
+    "warning",
+  );
+}
+
+async function startUpload(metadata, file, replaceUploadId = "") {
+  return api("upload_start", {
+    ...metadata,
+    file_name: file.name,
+    file_size: file.size,
+    replace_upload_id: replaceUploadId,
+  });
+}
+
 async function uploadChunk(uploadId, file, offset, chunkSize) {
   const chunk = file.slice(offset, offset + chunkSize);
   const response = await fetch(`api.cgi?action=upload_chunk&upload_id=${encodeURIComponent(uploadId)}&offset=${offset}`, {
@@ -336,27 +417,83 @@ async function submitUpload(event) {
   }
   const button = $('button[type="submit"]', form);
   button.disabled = true;
+  $("#uploadResult").className = "upload-result hidden";
+  setProgress(0, file.size, "Preparing");
+  let uploadId = "";
+  let transferComplete = false;
   try {
     const metadata = formDataObject(form);
     delete metadata.file;
-    const start = await api("upload_start", {
-      ...metadata,
-      file_name: file.name,
-      file_size: file.size,
-    });
+    let start;
+    try {
+      start = await startUpload(metadata, file);
+    } catch (err) {
+      if (err.details?.code !== "duplicate_filename") throw err;
+      const existing = err.details.existing;
+      const confirmed = window.confirm(
+        `${existing.file_name} already exists with status ${existing.status}. ` +
+        "Replace it only if this new file passes validation?",
+      );
+      if (!confirmed) {
+        showUploadMessage(
+          "Upload cancelled",
+          "The existing submission was kept unchanged.",
+          "warning",
+        );
+        setProgress(0, file.size, "Cancelled");
+        return;
+      }
+      start = await startUpload(metadata, file, existing.upload_id);
+    }
+    uploadId = start.upload_id;
     const chunkSize = start.chunk_size || (8 * 1024 * 1024);
     let offset = 0;
     while (offset < file.size) {
       setProgress(offset, file.size, "Uploading");
       offset = await uploadChunk(start.upload_id, file, offset, chunkSize);
     }
+    transferComplete = true;
     setProgress(file.size, file.size, "Validating");
     const finished = await api("upload_finish", {upload_id: start.upload_id});
-    setProgress(file.size, file.size, "Complete");
-    toast(finished.upload.status === "validated" ? "Upload validated" : "Upload received for review");
+    showUploadOutcome(finished.upload);
+    const accepted = ["validated", "received_manual_review"].includes(finished.upload.status);
+    toast(
+      finished.upload.status === "validated"
+        ? "Submission accepted"
+        : finished.upload.status === "received_manual_review"
+          ? "Upload received for manual review"
+          : "Submission was not accepted",
+      accepted ? "ok" : "error",
+    );
     await loadUploads();
     activateTab("submissionsTab");
   } catch (err) {
+    let reconciled = null;
+    if (uploadId) {
+      try {
+        const uploads = await loadUploads();
+        reconciled = uploads.find((item) => item.upload_id === uploadId);
+      } catch (_) {
+        // Keep the original upload error as the most useful message.
+      }
+    }
+    if (reconciled && !["receiving", "validating"].includes(reconciled.status)) {
+      showUploadOutcome(reconciled);
+      activateTab("submissionsTab");
+    } else {
+      showUploadMessage(
+        transferComplete ? "Acceptance not confirmed" : "Upload interrupted",
+        transferComplete
+          ? `${err.message} The file transfer completed, but the submission was not confirmed as accepted. Check Submissions before retrying.`
+          : `${err.message} The submission was not accepted.`,
+        transferComplete ? "warning" : "error",
+      );
+      setProgress(
+        transferComplete ? file.size : 0,
+        file.size,
+        transferComplete ? "Status unknown" : "Interrupted",
+      );
+    }
     toast(err.message, "error");
   } finally {
     button.disabled = false;

@@ -43,6 +43,20 @@ USER_STORAGE_QUOTA_BYTES = 100 * 1024 * 1024 * 1024
 MAX_CHUNK_BYTES = 8 * 1024 * 1024
 REGISTRATION_CODE_KEY = "registration_code"
 
+INACTIVE_UPLOAD_STATUSES = (
+    "deleted",
+    "duplicate",
+    "failed",
+    "rejected",
+    "server_error",
+    "superseded",
+)
+
+ACCEPTED_UPLOAD_STATUSES = (
+    "validated",
+    "received_manual_review",
+)
+
 EVENTS = {
     "MANGKHUT2018": {
         "name": "Typhoon Mangkhut (2018)",
@@ -280,6 +294,7 @@ def init_schema(con):
             stored_path TEXT,
             sha256 TEXT,
             validation_json TEXT,
+            replaces_upload_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -307,6 +322,11 @@ def init_schema(con):
             ON login_attempts(email, ip, attempted_at);
         """
     )
+    upload_columns = {
+        row["name"] for row in con.execute("PRAGMA table_info(uploads)").fetchall()
+    }
+    if "replaces_upload_id" not in upload_columns:
+        con.execute("ALTER TABLE uploads ADD COLUMN replaces_upload_id TEXT")
     con.commit()
 
 
@@ -488,13 +508,14 @@ def last_admin_guard(con, target_user_id, new_role=None, new_status=None):
 
 
 def user_storage_bytes(con, user_id):
+    excluded = ", ".join("?" for _ in INACTIVE_UPLOAD_STATUSES)
     row = con.execute(
-        """
+        f"""
         SELECT COALESCE(SUM(file_size), 0) AS total
         FROM uploads
-        WHERE user_id = ? AND status NOT IN ('deleted', 'failed')
+        WHERE user_id = ? AND status NOT IN ({excluded})
         """,
-        (user_id,),
+        (user_id, *INACTIVE_UPLOAD_STATUSES),
     ).fetchone()
     return int(row["total"] or 0)
 
@@ -558,10 +579,22 @@ def run_command(args, timeout=60):
     )
 
 
+def ncdump_executable():
+    candidates = [
+        os.environ.get("RUMI_NCDUMP"),
+        "/usr/bin/ncdump",
+        "/usr/local/bin/ncdump",
+        shutil.which("ncdump"),
+        "/home/lzhenn/array74/soft/anaconda3/bin/ncdump",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    raise PortalError(500, "NetCDF validation tool is unavailable.")
+
+
 def netcdf_kind(path):
-    ncdump = shutil.which("ncdump")
-    if not ncdump:
-        ncdump = "/home/lzhenn/array74/soft/anaconda3/bin/ncdump"
+    ncdump = ncdump_executable()
     proc = run_command([ncdump, "-k", str(path)], timeout=30)
     if proc.returncode != 0:
         raise PortalError(400, "ncdump could not read the file.", {"stderr": proc.stderr.strip()})
@@ -569,9 +602,7 @@ def netcdf_kind(path):
 
 
 def netcdf_header(path):
-    ncdump = shutil.which("ncdump")
-    if not ncdump:
-        ncdump = "/home/lzhenn/array74/soft/anaconda3/bin/ncdump"
+    ncdump = ncdump_executable()
     proc = run_command([ncdump, "-h", str(path)], timeout=90)
     if proc.returncode != 0:
         raise PortalError(400, "ncdump header extraction failed.", {"stderr": proc.stderr.strip()})
@@ -627,6 +658,8 @@ def validate_netcdf(path, filename, metadata):
             errors.append("File is readable by ncdump but is not NetCDF4.")
         header = netcdf_header(path)
     except PortalError as exc:
+        if exc.status >= 500:
+            raise
         errors.append(exc.message)
         if exc.details.get("stderr"):
             warnings.append(exc.details["stderr"][:600])
@@ -743,6 +776,7 @@ def upload_record_public(row, include_validation=True):
         "timestamp_utc": row["timestamp_utc"],
         "member": row["member"],
         "version": row["version"],
+        "replaces_upload_id": row.get("replaces_upload_id"),
         "sha256": row["sha256"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
