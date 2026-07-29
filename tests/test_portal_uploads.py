@@ -247,6 +247,28 @@ class UploadWorkflowTests(unittest.TestCase):
             result["upload"]["validation"]["errors"][0],
         )
 
+    def test_admin_upload_list_includes_uploader_identity(self):
+        self.insert_upload("admin-visible-upload", "rejected")
+        self.user["role"] = "admin"
+
+        result = portal_api.handle_uploads(self.con)
+
+        self.assertEqual(
+            result["uploads"][0]["uploader"],
+            {
+                "name": "Modeler",
+                "email": "modeler@example.org",
+                "institution": "HKUST",
+            },
+        )
+
+    def test_modeler_upload_list_does_not_expose_uploader_identity(self):
+        self.insert_upload("modeler-visible-upload", "rejected")
+
+        result = portal_api.handle_uploads(self.con)
+
+        self.assertNotIn("uploader", result["uploads"][0])
+
 
 class NetcdfValidationTests(unittest.TestCase):
     def test_missing_core_variable_is_an_error(self):

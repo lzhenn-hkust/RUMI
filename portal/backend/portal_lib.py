@@ -784,6 +784,12 @@ def upload_record_public(row, include_validation=True):
     if include_validation:
         record["validation"] = json.loads(row["validation_json"] or "{}")
     record["metadata"] = json.loads(row["metadata_json"] or "{}")
+    if row.get("uploader_name"):
+        record["uploader"] = {
+            "name": row["uploader_name"],
+            "email": row.get("uploader_email") or "",
+            "institution": row.get("uploader_institution") or "",
+        }
     return record
 
 

@@ -815,7 +815,18 @@ def handle_upload_finish(con):
 def handle_uploads(con):
     user = require_approved_user(con)
     if user["role"] == "admin":
-        rows = con.execute("SELECT * FROM uploads ORDER BY created_at DESC LIMIT 300").fetchall()
+        rows = con.execute(
+            """
+            SELECT uploads.*,
+                   users.name AS uploader_name,
+                   users.email AS uploader_email,
+                   users.institution AS uploader_institution
+            FROM uploads
+            JOIN users ON users.id = uploads.user_id
+            ORDER BY uploads.created_at DESC
+            LIMIT 300
+            """
+        ).fetchall()
     else:
         rows = con.execute(
             "SELECT * FROM uploads WHERE user_id = ? ORDER BY created_at DESC LIMIT 200",

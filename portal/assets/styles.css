@@ -480,6 +480,10 @@ table {
   min-width: 760px;
 }
 
+.submissions-table {
+  min-width: 940px;
+}
+
 th,
 td {
   border-bottom: 1px solid var(--line);
@@ -494,6 +498,23 @@ th {
   font-size: .78rem;
   text-transform: uppercase;
   letter-spacing: 0;
+}
+
+.uploader-identity {
+  display: grid;
+  gap: 3px;
+  min-width: 150px;
+  max-width: 220px;
+}
+
+.uploader-identity strong,
+.uploader-email {
+  overflow-wrap: anywhere;
+}
+
+.uploader-email {
+  color: var(--teal-dark);
+  font-size: .82rem;
 }
 
 .validation-details summary {
@@ -696,6 +717,10 @@ th {
   }
 
   table {
+    min-width: 0;
+  }
+
+  .submissions-table {
     min-width: 0;
   }
 

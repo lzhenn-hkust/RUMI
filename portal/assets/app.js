@@ -181,11 +181,23 @@ async function loadUploads() {
   if (!state.user) return;
   const data = await api("uploads");
   state.uploads = data.uploads;
+  const isAdmin = state.user.role === "admin";
   const rows = data.uploads.map((upload) => {
     const validation = validationText(upload.validation);
     const fileInfo = `${escapeHtml(upload.file_name)}<br><span class="muted">${escapeHtml(bytes(upload.file_size))}</span>`;
+    const uploader = upload.uploader || {};
+    const uploaderCell = isAdmin
+      ? `<td data-label="Uploader">
+          <div class="uploader-identity">
+            <strong>${escapeHtml(uploader.name || "Unknown user")}</strong>
+            <span class="uploader-email">${escapeHtml(uploader.email || "")}</span>
+            <span class="muted">${escapeHtml(uploader.institution || "")}</span>
+          </div>
+        </td>`
+      : "";
     return `<tr>
       <td data-label="File">${fileInfo}</td>
+      ${uploaderCell}
       <td data-label="Event">${escapeHtml(upload.event)}</td>
       <td data-label="Model">${escapeHtml(upload.model)}</td>
       <td data-label="Status">${statusPill(upload.status)}</td>
@@ -193,7 +205,8 @@ async function loadUploads() {
       <td data-label="Updated">${escapeHtml(upload.updated_at || upload.created_at)}</td>
     </tr>`;
   });
-  $("#uploadsBody").innerHTML = rows.join("") || `<tr><td colspan="6" class="muted">No submissions yet.</td></tr>`;
+  const columns = isAdmin ? 7 : 6;
+  $("#uploadsBody").innerHTML = rows.join("") || `<tr><td colspan="${columns}" class="muted">No submissions yet.</td></tr>`;
   return data.uploads;
 }
 
