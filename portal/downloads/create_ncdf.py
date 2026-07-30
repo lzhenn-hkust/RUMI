@@ -5,7 +5,7 @@ Phase 1: Hong Kong
 
 This script creates a properly formatted NetCDF4 output file conforming to
 the RUMI protocol specifications. It demonstrates:
-  - The standard output grid (15 arc-second regular lat/lon over Hong Kong)
+  - The standard core grid (9.7 arc-second regular lat/lon over Hong Kong)
   - Required variable names, attributes, and metadata structure
   - Correct handling of coordinate systems, time encoding, and CF conventions
 
@@ -21,12 +21,14 @@ Usage:
       3. Run the script
 
 Changelog:
+  v2.1 (2026-07-29): Updated the core grid to 9.7 arc-seconds (234 x 171)
+                      and added analysis/forecast experiment tags.
   v2.0 (2026-03-30): Complete rewrite for RUMI protocol. 2D gridded output
                       on standard 15 arc-sec lat/lon grid. Single-frame files.
 '''
 
 __title__   = 'RUMI NetCDF creation script'
-__version__ = 'v2.0 (2026-03-30)'
+__version__ = 'v2.1 (2026-07-29)'
 __author__  = 'Zhenning LI'
 
 import numpy as np
@@ -43,20 +45,17 @@ GRID = {
     'lat_north': 22.58,
     'lon_west':  113.82,
     'lon_east':  114.45,
-    'resolution_arcsec': 15,  # 15 arc-seconds ≈ 0.004167°
+    'resolution_arcsec': 9.7,  # ~0.002694 degrees, about 300 m in Hong Kong
 }
 GRID['dlat'] = GRID['resolution_arcsec'] / 3600.0
 GRID['dlon'] = GRID['resolution_arcsec'] / 3600.0
 GRID['lats'] = np.arange(GRID['lat_south'], GRID['lat_north'], GRID['dlat'])
 GRID['lons'] = np.arange(GRID['lon_west'],  GRID['lon_east'],  GRID['dlon'])
-GRID['nlat'] = len(GRID['lats'])  # 111
-GRID['nlon'] = len(GRID['lons'])  # 152
+GRID['nlat'] = len(GRID['lats'])  # 171
+GRID['nlon'] = len(GRID['lons'])  # 234
 
 # Standard pressure levels (Pa) for 3D output
-PRESSURE_LEVELS = np.array([
-    100000, 97500, 95000, 92500, 90000, 85000, 80000, 70000,
-    60000, 50000, 40000, 30000, 25000, 20000, 15000, 10000, 7000, 5000
-], dtype=np.float32)
+PRESSURE_LEVELS = np.array([85000, 50000, 20000], dtype=np.float32)
 
 # ============================================================================
 # Variable Definitions
@@ -109,15 +108,6 @@ RECOMMENDED_2D_DIAG_VARS = [
     ('W500',        'lagrangian_tendency_of_air_pressure',                  'Vertical velocity (omega) at 500 hPa level',          'Pa s-1',     {}),
     ('HELICITY',    '-',                  'Storm-relative helicity integrated over 0-3 km layer',          'm2 s-2',     {}),
     ('UH_MAX',      '-',                  'Maximum updraft helicity over output interval (2-5 km layer)',  'm2 s-2',     {}),
-    # Tropical Cyclone Events (e.g., MANGKHUT2018)
-    ('WSPD10MAX',   'wind_speed_of_gust',                                   'Maximum 10-m wind speed over output interval',        'm s-1',      {}),
-    ('SLP_MIN',     'air_pressure_at_mean_sea_level',                       'Minimum sea level pressure in model domain',          'Pa',         {}),
-    ('VORT850',     'atmosphere_relative_vorticity',                        'Vertical component of relative vorticity at 850 hPa', 's-1',        {}),
-    ('VORT700',     'atmosphere_relative_vorticity',                        'Vertical component of relative vorticity at 700 hPa', 's-1',        {}),
-    # Heavy Rain/Convective Events (e.g., HRAIN2023, HRAIN2025)
-    ('PRATE_MAX',   'precipitation_flux',                                    'Maximum precipitation rate in model domain',         'kg m-2 s-1', {}),
-    ('FLASH_RATE',  '',                                                      'Simulated lightning flash rate per hour (if available)', 'flashes hour-1', {}),
-    ('IVT',         '',                                                      'Integrated water vapor transport magnitude',         'kg m-1 s-1', {}),
 ]
 
 MANDATORY_3D_VARS = [
@@ -147,7 +137,7 @@ def set_info():
     '''Set experiment metadata. Update this for your simulation.'''
     info = {
         # Experiment identification
-        'experiment':       'RUMI-ERA5',
+        'experiment':       'RUMI-ERA5-AN',
         'event':            'MANGKHUT2018',
         'event_name':       'Typhoon Mangkhut (2018)',
         'model':            'WRF',
@@ -159,7 +149,12 @@ def set_info():
         'forecast_lead_time_hours':     '0',
 
         # Forcing data
-        'forcing_data':     'ECMWF ERA5',
+        'forcing_mode':            'analysis',
+        'forcing_source':          'ERA5',
+        'forcing_data':            'ECMWF ERA5 Reanalysis',
+        'forcing_data_version':    'v5',
+        'forcing_resolution':      '0.25 degree',
+        'forcing_update_interval': '1 hour',
 
         # Model configuration
         'horizontal_resolution': '1 km',
@@ -194,7 +189,7 @@ def set_info():
 
     # Construct filename following RUMI convention
     info['fname'] = (
-        f"RUMI-{info['experiment'].split('-')[1]}-{info['model']}"
+        f"{info['experiment']}-{info['model']}"
         f"-{info['event']}-{info['timestamp']}.nc"
     )
 
@@ -348,7 +343,7 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
         ds.history      = (f"Created {info['creation_date']} with "
                            f"{__title__} {__version__}")
         ds.references   = 'RUMI Protocol v1.2 (2026)'
-        ds.comment      = 'Example output file — replace with actual model data'
+        ds.comment      = 'Example output file; replace with actual model data'
 
         # RUMI-specific
         ds.experiment                   = info['experiment']
@@ -358,7 +353,12 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
         ds.initialization_time          = info['initialization_time']
         ds.forecast_initialization_time = info['forecast_initialization_time']
         ds.forecast_lead_time_hours     = info['forecast_lead_time_hours']
+        ds.forcing_mode                 = info['forcing_mode']
+        ds.forcing_source               = info['forcing_source']
         ds.forcing_data                 = info['forcing_data']
+        ds.forcing_data_version         = info['forcing_data_version']
+        ds.forcing_resolution           = info['forcing_resolution']
+        ds.forcing_update_interval      = info['forcing_update_interval']
         ds.horizontal_resolution        = info['horizontal_resolution']
         ds.vertical_levels              = info['vertical_levels']
         ds.model_top_pressure           = info['model_top_pressure']
@@ -385,10 +385,12 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
 
         # Output grid documentation
         ds.output_grid_type       = 'regular lat/lon'
-        ds.output_grid_resolution = '15 arc-seconds (~0.004167 degrees)'
+        ds.output_grid_resolution = ('9.7 arc-seconds (~0.002694 degrees, '
+                                     'approximately 300 m at Hong Kong latitude)')
         ds.output_grid_lat_range  = f"{GRID['lat_south']}N to {GRID['lat_north']}N"
         ds.output_grid_lon_range  = f"{GRID['lon_west']}E to {GRID['lon_east']}E"
         ds.output_grid_dimensions = f"{GRID['nlon']} x {GRID['nlat']} (lon x lat)"
+        ds.output_grid_cell_count = GRID['nlon'] * GRID['nlat']
 
     print(f'Created empty RUMI NetCDF: {fpath}')
     return fpath
@@ -450,13 +452,42 @@ def fill_example_data(fpath):
     print(f'Filled example data: {fpath}')
 
 
+def write_2d_template(output_path):
+    '''Write a core-only 2D template without synthetic field data.'''
+    from pathlib import Path
+
+    output_path = Path(output_path)
+    info = set_info()
+    info['outpath'] = str(output_path.parent or Path('.'))
+    info['fname'] = output_path.name
+    return create_rumi_netcdf(
+        info,
+        include_recommended=False,
+        include_3d=False,
+    )
+
+
 def main():
     '''Generate an example RUMI NetCDF file.'''
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__title__)
+    parser.add_argument(
+        '--template',
+        metavar='PATH',
+        help='write a core-only 2D template and exit',
+    )
+    args = parser.parse_args()
+
+    if args.template:
+        write_2d_template(args.template)
+        return
+
     print(f'{__title__} {__version__}')
     print(f'Output grid: {GRID["nlon"]} x {GRID["nlat"]} '
           f'({GRID["lon_west"]}-{GRID["lon_east"]}E, '
           f'{GRID["lat_south"]}-{GRID["lat_north"]}N), '
-          f'15 arc-sec resolution')
+          f'{GRID["resolution_arcsec"]} arc-sec resolution')
 
     info = set_info()
     fpath = create_rumi_netcdf(info, include_recommended=True, include_3d=True)

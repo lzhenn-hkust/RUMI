@@ -1,78 +1,131 @@
-# RUMI — Standard Output Grid
+# RUMI Phase 1 Output Protocol
 
-## Grid Specification
+This repository contains the Phase 1 Hong Kong core-domain output specification,
+the NetCDF creation script, and the RUMI upload portal.
 
-All participating models must interpolate their output onto the following unified standard grid for intercomparison:
+## Standard Core Grid
+
+All 2D submissions must be interpolated to the following regular
+latitude/longitude grid. The portal accepts the core domain only.
 
 | Property | Value |
 |----------|-------|
-| Type | Regular latitude/longitude |
-| Resolution | 15 arc-seconds (~0.004167°, ~460 m) |
-| Latitude range | 22.12°N – 22.58°N |
-| Longitude range | 113.82°E – 114.45°E |
-| Grid dimensions | 152 (lon) × 111 (lat) |
-| Coverage | Hong Kong and surrounding waters |
+| Resolution | 9.7 arc-seconds (~0.002694 degrees, ~300 m) |
+| Latitude points | 171 |
+| Longitude points | 234 |
+| First latitude | 22.12 degrees N |
+| First longitude | 113.82 degrees E |
+| Last latitude | 22.57805556 degrees N |
+| Last longitude | 114.44780556 degrees E |
+| Total cells | 40,014 |
+
+Coordinates are defined exactly as:
+
+```text
+lat[i] = 22.12  + i * (9.7 / 3600), i = 0 ... 170
+lon[j] = 113.82 + j * (9.7 / 3600), j = 0 ... 233
+```
+
+The expanded RUMI domain is not accepted by the Phase 1 upload portal.
 
 ## Output Variables
 
-### Core 2D Variables (Mandatory)
+### Core 2D Variables
+
+Every submitted NetCDF file must contain all nine variables.
 
 | Variable | Description | Units |
 |----------|-------------|-------|
 | T2M | 2-m air temperature | K |
-| U10M | 10-m eastward wind | m/s |
-| V10M | 10-m northward wind | m/s |
-| PRATE | Precipitation rate | kg m⁻² s⁻¹ |
-| SLP | Mean sea level pressure | Pa |
-| RH2M | 2-m relative humidity | 0–1 |
-| TOTAL_PRECIP | Accumulated total precipitation | kg m⁻² |
+| U10M | 10-m eastward wind | m s-1 |
+| V10M | 10-m northward wind | m s-1 |
+| PRATE | Precipitation rate | kg m-2 s-1 |
+| SLP | Mean sea-level pressure | Pa |
+| RH2M | 2-m relative humidity | 0-1 |
+| TOTAL_PRECIP | Accumulated total precipitation | kg m-2 |
 | PSFC | Surface pressure | Pa |
-| Q2M | 2-m specific humidity | kg/kg |
+| Q2M | 2-m specific humidity | kg kg-1 |
 
-### 3D Pressure-Level Variables (Recommend to archive, not required to submit in current stage)
+### 3D Pressure-Level Variables
 
-18 standard pressure levels: 1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50 hPa
+The 3D fields are recommended for archiving but are not required by the current
+portal. The authoritative example defines 850, 500, and 200 hPa.
 
 | Variable | Description | Units |
 |----------|-------------|-------|
 | T | Air temperature | K |
 | Z | Geopotential height | m |
-| RH | Relative humidity | 0–1 |
-| U | Eastward wind | m/s |
-| V | Northward wind | m/s |
-| OMEGA | Vertical velocity | Pa/s |
+| RH | Relative humidity | 0-1 |
+| U | Eastward wind | m s-1 |
+| V | Northward wind | m s-1 |
+| OMEGA | Vertical velocity | Pa s-1 |
 
-### Recommended Variables
+Additional 2D and 3D fields are defined in `create_ncdf.py`.
 
-Additional surface variables (TSK, TD2M, LH, HFX, radiation fluxes, etc.) and 3D variables (THETA, Q, W, QC, QI, QR, TKE) are recommended but not required. See `create_ncdf.py` for the full list.
+## File Convention
 
-## File Format
+- Format: NetCDF4
+- Conventions: CF-1.8
+- Time: one timestamp per file, expressed in UTC
+- Compression: zlib
+- Missing value: `-9999.0`
 
-- **Format**: NetCDF4, CF-1.8 conventions
-- **Time**: One timestamp per file, seconds since 1970-01-01 UTC
-- **Compression**: zlib enabled
-- **Missing value**: -9999.0
+### Filename
 
-### Filename Convention
-
+```text
+<RUMI experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_<member>][_vNN].nc
 ```
-RUMI-{forcing}-{model}-{event}-{YYYYMMDDHHmmss}.nc
+
+The experiment is the complete forcing and mode tag. `AN` means
+analysis/reanalysis driven, while `FC` means forecast driven.
+
+```text
+RUMI-ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc
+RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc
 ```
 
-Example: `RUMI-ERA5-WRF-MANGKHUT2018-20180916120000.nc`
+For the second example:
+
+- `experiment = RUMI-GFS-FC`
+- `model = MPAS`
+- `event = HRAIN2025`
+
+The model identifier is the final hyphen-delimited token before the event code.
+Use an identifier without hyphens, such as `WRFARW`, when a model name contains
+multiple words.
+
+### Required Metadata
+
+The global `experiment` attribute must exactly match the complete experiment
+tag in the filename. The global `source` attribute identifies the model.
+Files should also document:
+
+- simulation and initialization times
+- forecast initialization and lead time
+- forcing mode, source, dataset, version, resolution, and update interval
+- model horizontal and vertical configuration
+- contact and creation information
+- physics parameterizations and surface datasets
+
+See `set_info()` in `create_ncdf.py` for the complete metadata structure.
 
 ## Usage
 
-Use `create_ncdf.py` to generate compliant output files:
+Generate a populated example file:
 
 ```bash
-# Generate an example file with placeholder data
 python3 create_ncdf.py
-
-# To use with your model output:
-# 1. Update set_info() with your experiment metadata
-# 2. Modify get_model_data() to read your model output
-# 3. Run the script
 ```
 
-A template file `RUMI_template_2d.nc` is also provided for reference.
+Generate a core-only 2D template:
+
+```bash
+python3 create_ncdf.py --template RUMI_template_2d.nc
+```
+
+For model output, update `set_info()` and replace the synthetic data logic in
+`fill_example_data()` with data read and interpolated from the source model.
+
+The portal validates the filename interpretation, all core variables, NetCDF4
+format, exact 234 x 171 dimensions, and every latitude/longitude coordinate
+before accepting a submission.

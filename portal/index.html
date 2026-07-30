@@ -98,7 +98,8 @@
 
             <div class="form-grid">
               <label>Experiment
-                <select name="experiment" required></select>
+                <input name="experiment" list="experimentOptions" placeholder="RUMI-ERA5-AN" required>
+                <datalist id="experimentOptions"></datalist>
               </label>
               <label>Event
                 <select name="event" required></select>
@@ -107,13 +108,37 @@
                 <input name="model" placeholder="WRF, MPAS, UM" required>
               </label>
               <label>Forcing data
-                <input name="forcing_data" placeholder="ECMWF ERA5" required>
+                <input name="forcing_data" placeholder="ECMWF ERA5 Reanalysis" required>
+              </label>
+              <label>Forcing mode
+                <select name="forcing_mode" required>
+                  <option value="analysis">Analysis</option>
+                  <option value="forecast">Forecast</option>
+                </select>
+              </label>
+              <label>Forcing source
+                <input name="forcing_source" placeholder="ERA5, GFS" required>
+              </label>
+              <label>Forcing version
+                <input name="forcing_data_version" placeholder="v5">
+              </label>
+              <label>Forcing resolution
+                <input name="forcing_resolution" placeholder="0.25 degree">
+              </label>
+              <label>Forcing update interval
+                <input name="forcing_update_interval" placeholder="1 hour">
               </label>
               <label>Simulation start time
                 <input name="simulation_start_time" placeholder="2018-09-15T00:00:00Z" required>
               </label>
               <label>Initialization time
                 <input name="initialization_time" placeholder="2018-09-15T00:00:00Z" required>
+              </label>
+              <label>Forecast initialization time
+                <input name="forecast_initialization_time" placeholder="2018-09-15T00:00:00Z">
+              </label>
+              <label>Forecast lead time
+                <input name="forecast_lead_time_hours" placeholder="0 hours">
               </label>
               <label>Horizontal resolution
                 <input name="horizontal_resolution" placeholder="1 km" required>
@@ -291,11 +316,12 @@
           <section class="panel">
             <h2>Format</h2>
             <dl class="spec-list">
-              <dt>Grid</dt><dd>regular lat/lon, 15 arc-sec, 111 x 152</dd>
+              <dt>Grid</dt><dd>core domain, regular lat/lon, 9.7 arc-sec, 234 lon x 171 lat</dd>
+              <dt>Coordinates</dt><dd>lat: 22.12 to 22.57805556; lon: 113.82 to 114.44780556</dd>
               <dt>Frequency</dt><dd>hourly minimum, one time snapshot per file</dd>
               <dt>Format</dt><dd>NetCDF4, CF-1.8, _FillValue = -9999.0</dd>
-              <dt>Name</dt><dd>RUMI-&lt;Experiment&gt;-&lt;Model&gt;-&lt;Event&gt;-&lt;YYYYMMDDHHMMSS&gt;.nc</dd>
-              <dt>3D fields</dt><dd>recommended to archive; not required for current submission stage</dd>
+              <dt>Name</dt><dd>&lt;RUMI experiment&gt;-&lt;Model&gt;-&lt;Event&gt;-&lt;YYYYMMDDHHMMSS&gt;.nc</dd>
+              <dt>3D fields</dt><dd>850, 500, and 200 hPa; recommended to archive, not currently required</dd>
             </dl>
           </section>
         </div>
@@ -304,6 +330,6 @@
   </main>
 
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="assets/app.js?v=20260729-uploader"></script>
+  <script src="assets/app.js?v=20260730-protocol-v21"></script>
 </body>
 </html>

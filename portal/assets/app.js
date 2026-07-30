@@ -102,14 +102,13 @@ function setView() {
 
 function fillConstants() {
   if (!state.constants) return;
-  const experimentSelect = $('[name="experiment"]', $("#uploadForm"));
+  const experimentList = $("#experimentOptions");
   const eventSelect = $('[name="event"]', $("#uploadForm"));
-  if (!experimentSelect.options.length) {
+  if (!experimentList.children.length) {
     state.constants.experiments.forEach((item) => {
       const option = document.createElement("option");
       option.value = item;
-      option.textContent = item;
-      experimentSelect.append(option);
+      experimentList.append(option);
     });
   }
   if (!eventSelect.options.length) {
@@ -296,16 +295,16 @@ async function logout() {
 function parseFileName(name) {
   if (!state.constants) return null;
   const events = Object.keys(state.constants.events).join("|");
-  const pattern = new RegExp(`^RUMI-([A-Za-z0-9]+)-(.+)-(${events})-(\\d{14})(?:_([A-Za-z0-9._-]+))?(?:_v([0-9]{2,}))?\\.nc$`);
+  const pattern = new RegExp(`^RUMI-([A-Za-z0-9._]+(?:-[A-Za-z0-9._]+)*)-(AN|FC)-([A-Za-z0-9._]+)-(${events})-(\\d{14})(?:_([A-Za-z0-9._-]+))?(?:_v([0-9]{2,}))?\\.nc$`);
   const match = name.match(pattern);
   if (!match) return null;
   return {
-    experiment: match[1],
-    model: match[2],
-    event: match[3],
-    stamp: match[4],
-    member: match[5] || "",
-    version: match[6] ? `v${match[6]}` : "",
+    experiment: `RUMI-${match[1]}-${match[2]}`,
+    model: match[3],
+    event: match[4],
+    stamp: match[5],
+    member: match[6] || "",
+    version: match[7] ? `v${match[7]}` : "",
   };
 }
 
@@ -318,6 +317,12 @@ function autoFillFromFile(file) {
   form.elements.event.value = parsed.event;
   form.elements.member.value = parsed.member;
   form.elements.version.value = parsed.version;
+  const experimentParts = parsed.experiment.split("-");
+  const mode = experimentParts.at(-1);
+  if (mode === "AN" || mode === "FC") {
+    form.elements.forcing_mode.value = mode === "AN" ? "analysis" : "forecast";
+    form.elements.forcing_source.value = experimentParts.slice(1, -1).join("-");
+  }
 }
 
 function setProgress(done, total, label) {

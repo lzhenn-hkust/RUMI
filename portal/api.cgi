@@ -280,7 +280,12 @@ def metadata_from_payload(payload):
         "event",
         "member",
         "version",
+        "forcing_mode",
+        "forcing_source",
         "forcing_data",
+        "forcing_data_version",
+        "forcing_resolution",
+        "forcing_update_interval",
         "simulation_start_time",
         "initialization_time",
         "forecast_initialization_time",
@@ -541,6 +546,25 @@ def handle_upload_start(con):
     if not metadata["experiment"] or not metadata["model"]:
         raise PortalError(400, "Experiment and model are required.")
     parsed = parse_rumi_filename(file_name) if kind == "netcdf" else None
+    if kind == "netcdf" and not parsed:
+        raise PortalError(
+            400,
+            "File name must follow <RUMI experiment>-<Model>-<Event>-"
+            "<YYYYMMDDHHMMSS>[_member][_vNN].nc.",
+        )
+    if parsed:
+        comparisons = (
+            ("experiment", str.upper),
+            ("model", str.lower),
+            ("event", str.upper),
+        )
+        for field, normalize in comparisons:
+            submitted = metadata.get(field, "")
+            if submitted and normalize(parsed[field]) != normalize(submitted):
+                raise PortalError(
+                    400,
+                    f"File name {field} does not match the submitted metadata.",
+                )
     timestamp_utc = parsed["timestamp"] if parsed else None
     inactive_placeholders = ", ".join("?" for _ in INACTIVE_UPLOAD_STATUSES)
     existing = con.execute(

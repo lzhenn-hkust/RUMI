@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import subprocess
 import tarfile
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -41,6 +42,9 @@ PBKDF2_ITERATIONS = 240000
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024 * 1024
 USER_STORAGE_QUOTA_BYTES = 100 * 1024 * 1024 * 1024
 MAX_CHUNK_BYTES = 8 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 2000
+MAX_ARCHIVE_NETCDF_FILES = 500
+MAX_ARCHIVE_EXPANDED_BYTES = MAX_UPLOAD_BYTES
 REGISTRATION_CODE_KEY = "registration_code"
 
 INACTIVE_UPLOAD_STATUSES = (
@@ -90,7 +94,21 @@ EVENTS = {
     },
 }
 
-EXPERIMENTS = ["ERA5", "FNL", "GFS", "OTHER", "UKMO", "JRA55", "IFS"]
+EXPERIMENTS = [
+    "RUMI-ERA5-AN",
+    "RUMI-FNL-AN",
+    "RUMI-GFS-FC",
+    "RUMI-OTHER-AN",
+    "RUMI-OTHER-FC",
+]
+
+CORE_GRID = {
+    "lat_south": 22.12,
+    "lon_west": 113.82,
+    "resolution_degrees": 9.7 / 3600.0,
+    "nlat": 171,
+    "nlon": 234,
+}
 
 CORE_2D_VARS = [
     "T2M",
@@ -135,13 +153,6 @@ RECOMMENDED_2D_VARS = [
     "W500",
     "HELICITY",
     "UH_MAX",
-    "WSPD10MAX",
-    "SLP_MIN",
-    "VORT850",
-    "VORT700",
-    "PRATE_MAX",
-    "FLASH_RATE",
-    "IVT",
 ]
 
 THREE_D_VARS = ["T", "Z", "RH", "U", "V", "OMEGA"]
@@ -157,7 +168,14 @@ REQUIRED_GLOBAL_ATTRS = [
     "event_name",
     "simulation_start_time",
     "initialization_time",
+    "forecast_initialization_time",
+    "forecast_lead_time_hours",
+    "forcing_mode",
+    "forcing_source",
     "forcing_data",
+    "forcing_data_version",
+    "forcing_resolution",
+    "forcing_update_interval",
     "horizontal_resolution",
     "contact",
     "creator_name",
@@ -182,7 +200,8 @@ PHYSICS_ATTRS = [
 
 SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,240}$")
 RUMI_FILENAME_RE = re.compile(
-    r"^RUMI-([A-Za-z0-9]+)-(.+)-("
+    r"^RUMI-([A-Za-z0-9._]+(?:-[A-Za-z0-9._]+)*)-(AN|FC)-"
+    r"([A-Za-z0-9._]+)-("
     + "|".join(EVENTS.keys())
     + r")-(\d{14})(?:_([A-Za-z0-9._-]+))?(?:_v([0-9]{2,}))?\.nc$"
 )
@@ -542,13 +561,13 @@ def parse_rumi_filename(name):
     match = RUMI_FILENAME_RE.match(name)
     if not match:
         return None
-    experiment, model, event, stamp, member, version = match.groups()
+    forcing, mode, model, event, stamp, member, version = match.groups()
     try:
         ts = dt.datetime.strptime(stamp, "%Y%m%d%H%M%S").replace(tzinfo=dt.timezone.utc)
     except ValueError:
         return None
     return {
-        "experiment": experiment,
+        "experiment": f"RUMI-{forcing}-{mode}",
         "model": model,
         "event": event,
         "timestamp": ts.isoformat().replace("+00:00", "Z"),
@@ -609,6 +628,41 @@ def netcdf_header(path):
     return proc.stdout
 
 
+def netcdf_coordinates(path):
+    ncdump = ncdump_executable()
+    proc = run_command(
+        [ncdump, "-p", "15,15", "-v", "lat,lon", str(path)],
+        timeout=90,
+    )
+    if proc.returncode != 0:
+        raise PortalError(
+            400,
+            "Latitude/longitude coordinate extraction failed.",
+            {"stderr": proc.stderr.strip()},
+        )
+    sections = proc.stdout.split("data:", 1)
+    if len(sections) != 2:
+        return {"lat": [], "lon": []}
+
+    def values(name):
+        match = re.search(
+            r"(?:^|\n)\s*" + re.escape(name) + r"\s*=\s*(.*?);",
+            sections[1],
+            flags=re.DOTALL,
+        )
+        if not match:
+            return []
+        return [
+            float(value)
+            for value in re.findall(
+                r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?",
+                match.group(1),
+            )
+        ]
+
+    return {"lat": values("lat"), "lon": values("lon")}
+
+
 def header_has_var(header, name):
     return re.search(r"\b(?:byte|char|short|int|int64|float|double)\s+" + re.escape(name) + r"\s*\(", header) is not None
 
@@ -639,15 +693,19 @@ def validate_netcdf(path, filename, metadata):
 
     parsed = parse_rumi_filename(filename)
     if not parsed:
-        errors.append("File name must follow RUMI-<Experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_member][_vNN].nc.")
+        errors.append(
+            "File name must follow <RUMI experiment>-<Model>-<Event>-"
+            "<YYYYMMDDHHMMSS>[_member][_vNN].nc, for example "
+            "RUMI-ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc."
+        )
     else:
         summary["filename"] = parsed
         if metadata.get("experiment") and parsed["experiment"].upper() != metadata.get("experiment", "").upper():
-            warnings.append("File name experiment does not match the submitted metadata.")
+            errors.append("File name experiment does not match the submitted metadata.")
         if metadata.get("model") and parsed["model"].lower() != metadata.get("model", "").lower():
-            warnings.append("File name model does not match the submitted metadata.")
+            errors.append("File name model does not match the submitted metadata.")
         if metadata.get("event") and parsed["event"] != metadata.get("event"):
-            warnings.append("File name event does not match the submitted metadata.")
+            errors.append("File name event does not match the submitted metadata.")
         if validate_timestamp_in_event(parsed["timestamp"], parsed["event"]) is False:
             warnings.append("File timestamp is outside the baseline simulation period for the selected event.")
 
@@ -657,6 +715,7 @@ def validate_netcdf(path, filename, metadata):
         if "netCDF-4" not in kind:
             errors.append("File is readable by ncdump but is not NetCDF4.")
         header = netcdf_header(path)
+        coordinates = netcdf_coordinates(path)
     except PortalError as exc:
         if exc.status >= 500:
             raise
@@ -676,20 +735,42 @@ def validate_netcdf(path, filename, metadata):
 
     lat = header_dim(header, "lat")
     lon = header_dim(header, "lon")
-    south_north = header_dim(header, "south_north")
-    west_east = header_dim(header, "west_east")
     summary["dimensions"] = {
         "lat": lat,
         "lon": lon,
-        "south_north": south_north,
-        "west_east": west_east,
     }
-    has_standard_latlon = lat == 111 and lon == 152
-    has_standard_alias = south_north == 111 and west_east == 152
-    if not (has_standard_latlon or has_standard_alias):
-        errors.append("Standard grid dimensions should be 111 lat by 152 lon.")
-    if has_standard_alias and not has_standard_latlon:
-        warnings.append("File uses south_north/west_east dimensions; standard 2D submissions should prefer lat/lon.")
+    if lat != CORE_GRID["nlat"] or lon != CORE_GRID["nlon"]:
+        errors.append(
+            "Standard core grid dimensions must be 171 lat by 234 lon "
+            "(9.7 arc-seconds)."
+        )
+
+    expected_coordinates = {
+        "lat": (CORE_GRID["lat_south"], CORE_GRID["nlat"]),
+        "lon": (CORE_GRID["lon_west"], CORE_GRID["nlon"]),
+    }
+    for name, (start, count) in expected_coordinates.items():
+        values = coordinates[name]
+        valid = len(values) == count and all(
+            abs(value - (start + index * CORE_GRID["resolution_degrees"])) <= 1e-7
+            for index, value in enumerate(values)
+        )
+        if not valid:
+            if len(values) > 1:
+                mean_spacing_arcsec = (
+                    (values[-1] - values[0]) / (len(values) - 1) * 3600
+                )
+                received = (
+                    f" Received {len(values)} points from {values[0]:.8f} to "
+                    f"{values[-1]:.8f}, with mean spacing "
+                    f"{mean_spacing_arcsec:.6f} arc-seconds."
+                )
+            else:
+                received = f" Received {len(values)} coordinate values."
+            errors.append(
+                f"{name} coordinates must follow the RUMI 9.7 arc-second "
+                f"core grid ({count} points starting at {start}).{received}"
+            )
 
     missing_attrs = [name for name in REQUIRED_GLOBAL_ATTRS if header_attr(header, name) is None]
     if missing_attrs:
@@ -705,13 +786,18 @@ def validate_netcdf(path, filename, metadata):
 
     attr_event = header_attr(header, "event")
     if parsed and attr_event and attr_event != parsed["event"]:
-        warnings.append("Global attribute event does not match file name.")
+        errors.append("Global attribute event does not match file name.")
 
     attr_experiment = header_attr(header, "experiment")
     if parsed and attr_experiment:
-        normalized = attr_experiment.replace("RUMI-", "").upper()
-        if normalized != parsed["experiment"].upper():
-            warnings.append("Global attribute experiment does not match file name.")
+        if attr_experiment.upper() != parsed["experiment"].upper():
+            errors.append("Global attribute experiment does not match file name.")
+
+    attr_model = header_attr(header, "model") or header_attr(header, "source")
+    if parsed and attr_model and attr_model.lower() != parsed["model"].lower():
+        warnings.append(
+            "Global attribute model/source does not match the model in the file name."
+        )
 
     return {"errors": errors, "warnings": warnings, "summary": summary}
 
@@ -719,33 +805,109 @@ def validate_netcdf(path, filename, metadata):
 def validate_archive(path, filename, metadata):
     errors = []
     warnings = []
-    summary = {"archive_members": 0, "netcdf_files": 0, "documentation_files": 0}
+    summary = {
+        "archive_members": 0,
+        "netcdf_files": 0,
+        "validated_netcdf_files": 0,
+        "documentation_files": 0,
+    }
     lower = filename.lower()
     docs_ext = (".pdf", ".docx", ".txt", ".md")
+
+    def entry_name(entry):
+        return entry.filename if hasattr(entry, "filename") else entry.name
+
+    def entry_size(entry):
+        return entry.file_size if hasattr(entry, "file_size") else entry.size
+
+    def validate_members(entries, open_member):
+        for entry in entries:
+            member_name = entry_name(entry)
+            temporary_path = None
+            try:
+                with open_member(entry) as source:
+                    with tempfile.NamedTemporaryFile(
+                        dir=path.parent,
+                        prefix="rumi-validate-",
+                        suffix=".nc",
+                        delete=False,
+                    ) as temporary:
+                        shutil.copyfileobj(source, temporary, length=1024 * 1024)
+                        temporary_path = Path(temporary.name)
+                result = validate_netcdf(
+                    temporary_path,
+                    Path(member_name).name,
+                    metadata,
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                errors.append(f"{member_name}: could not be read: {exc}")
+                continue
+            finally:
+                if temporary_path:
+                    temporary_path.unlink(missing_ok=True)
+
+            summary["validated_netcdf_files"] += 1
+            errors.extend(f"{member_name}: {message}" for message in result["errors"])
+            warnings.extend(
+                f"{member_name}: {message}" for message in result["warnings"]
+            )
+
+    def inspect_archive(entries, open_member, archive_kind):
+        names = [entry_name(entry) for entry in entries]
+        netcdf_entries = [
+            entry for entry in entries if entry_name(entry).lower().endswith(".nc")
+        ]
+        summary["archive_kind"] = archive_kind
+        summary["archive_members"] = len(entries)
+        summary["netcdf_files"] = len(netcdf_entries)
+        summary["documentation_files"] = len(
+            [name for name in names if name.lower().endswith(docs_ext)]
+        )
+
+        unsafe = [
+            name
+            for name in names
+            if name.startswith("/") or ".." in Path(name).parts
+        ]
+        if unsafe:
+            errors.append("Archive contains unsafe paths.")
+        if len(entries) > MAX_ARCHIVE_MEMBERS:
+            errors.append(f"Archive contains more than {MAX_ARCHIVE_MEMBERS} files.")
+        if len(netcdf_entries) > MAX_ARCHIVE_NETCDF_FILES:
+            errors.append(
+                f"Archive contains more than {MAX_ARCHIVE_NETCDF_FILES} NetCDF files."
+            )
+        if sum(entry_size(entry) for entry in entries) > MAX_ARCHIVE_EXPANDED_BYTES:
+            errors.append("Archive expands beyond the permitted size.")
+        if not errors:
+            validate_members(netcdf_entries, open_member)
 
     try:
         if lower.endswith(".zip"):
             with zipfile.ZipFile(path) as archive:
-                names = [info.filename for info in archive.infolist() if not info.is_dir()]
+                entries = [info for info in archive.infolist() if not info.is_dir()]
+                inspect_archive(entries, archive.open, "zip")
         else:
             with tarfile.open(path, "r:*") as archive:
-                names = [member.name for member in archive.getmembers() if member.isfile()]
+                entries = [member for member in archive.getmembers() if member.isfile()]
+
+                def archive_opener(entry):
+                    source = archive.extractfile(entry)
+                    if source is None:
+                        raise OSError("Archive member is unavailable.")
+                    return source
+
+                inspect_archive(entries, archive_opener, "tar")
     except (zipfile.BadZipFile, tarfile.TarError, OSError) as exc:
-        return {"errors": [f"Archive could not be read: {exc}"], "warnings": warnings, "summary": summary}
+        return {
+            "errors": [f"Archive could not be read: {exc}"],
+            "warnings": warnings,
+            "summary": summary,
+        }
 
-    unsafe = [name for name in names if name.startswith("/") or ".." in Path(name).parts]
-    if unsafe:
-        errors.append("Archive contains unsafe paths.")
-
-    netcdf_files = [name for name in names if name.lower().endswith(".nc")]
-    doc_files = [name for name in names if name.lower().endswith(docs_ext)]
-    summary["archive_members"] = len(names)
-    summary["netcdf_files"] = len(netcdf_files)
-    summary["documentation_files"] = len(doc_files)
-
-    if not netcdf_files:
+    if not summary["netcdf_files"]:
         errors.append("Archive does not contain any .nc files.")
-    if not doc_files:
+    if not summary["documentation_files"]:
         warnings.append("Archive does not include a recognizable technical document.")
 
     return {"errors": errors, "warnings": warnings, "summary": summary}

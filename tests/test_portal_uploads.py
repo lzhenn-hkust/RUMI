@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import zipfile
 from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
@@ -86,7 +87,7 @@ class UploadWorkflowTests(unittest.TestCase):
         upload_id,
         status,
         content=b"sample",
-        file_name="RUMI-GFS-MODEL-HRAIN2025-20250804000000.nc",
+        file_name="RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
         sha256=None,
         replaces_upload_id=None,
     ):
@@ -102,7 +103,7 @@ class UploadWorkflowTests(unittest.TestCase):
                 file_kind, status, experiment, model, event, metadata_json,
                 temp_path, sha256, replaces_upload_id, created_at, updated_at
             )
-            VALUES (?, 1, ?, ?, ?, 'netcdf', ?, 'GFS', 'MODEL',
+            VALUES (?, 1, ?, ?, ?, 'netcdf', ?, 'RUMI-GFS-FC', 'MODEL',
                     'HRAIN2025', ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -112,7 +113,11 @@ class UploadWorkflowTests(unittest.TestCase):
                 len(content),
                 status,
                 json.dumps(
-                    {"experiment": "GFS", "model": "MODEL", "event": "HRAIN2025"}
+                    {
+                        "experiment": "RUMI-GFS-FC",
+                        "model": "MODEL",
+                        "event": "HRAIN2025",
+                    }
                 ),
                 str(temp_path) if temp_path else None,
                 sha256,
@@ -153,9 +158,9 @@ class UploadWorkflowTests(unittest.TestCase):
     def test_same_filename_requires_explicit_replacement(self):
         self.insert_upload("existing-upload", "validated")
         payload = {
-            "file_name": "RUMI-GFS-MODEL-HRAIN2025-20250804000000.nc",
+            "file_name": "RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
             "file_size": 123,
-            "experiment": "GFS",
+            "experiment": "RUMI-GFS-FC",
             "model": "MODEL",
             "event": "HRAIN2025",
         }
@@ -182,14 +187,14 @@ class UploadWorkflowTests(unittest.TestCase):
             "accepted-upload",
             "validated",
             content=b"same",
-            file_name="RUMI-GFS-OLD-HRAIN2025-20250804000000.nc",
+            file_name="RUMI-GFS-FC-OLD-HRAIN2025-20250804000000.nc",
             sha256=digest,
         )
         temp_path = self.insert_upload(
             "duplicate-upload",
             "receiving",
             content=b"same",
-            file_name="RUMI-GFS-NEW-HRAIN2025-20250804000000.nc",
+            file_name="RUMI-GFS-FC-NEW-HRAIN2025-20250804000000.nc",
         )
 
         result = self.finish(
@@ -271,6 +276,67 @@ class UploadWorkflowTests(unittest.TestCase):
 
 
 class NetcdfValidationTests(unittest.TestCase):
+    def core_coordinates(self):
+        spacing = portal_lib.CORE_GRID["resolution_degrees"]
+        return {
+            "lat": [
+                portal_lib.CORE_GRID["lat_south"] + index * spacing
+                for index in range(portal_lib.CORE_GRID["nlat"])
+            ],
+            "lon": [
+                portal_lib.CORE_GRID["lon_west"] + index * spacing
+                for index in range(portal_lib.CORE_GRID["nlon"])
+            ],
+        }
+
+    def test_filename_parses_complete_experiment_and_model(self):
+        parsed = portal_lib.parse_rumi_filename(
+            "RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc"
+        )
+
+        self.assertEqual(parsed["experiment"], "RUMI-GFS-FC")
+        self.assertEqual(parsed["model"], "MPAS")
+
+    def test_previous_filename_without_mode_is_rejected(self):
+        parsed = portal_lib.parse_rumi_filename(
+            "RUMI-ERA5-WRF-MANGKHUT2018-20180916120000.nc"
+        )
+
+        self.assertIsNone(parsed)
+
+    def test_coordinate_dump_requests_full_precision(self):
+        completed = mock.Mock(
+            returncode=0,
+            stdout="netcdf sample { data:\n lat = 22.12;\n lon = 113.82;\n}",
+            stderr="",
+        )
+        with (
+            mock.patch.object(
+                portal_lib,
+                "ncdump_executable",
+                return_value="/usr/bin/ncdump",
+            ),
+            mock.patch.object(
+                portal_lib,
+                "run_command",
+                return_value=completed,
+            ) as runner,
+        ):
+            coordinates = portal_lib.netcdf_coordinates(Path("sample.nc"))
+
+        runner.assert_called_once_with(
+            [
+                "/usr/bin/ncdump",
+                "-p",
+                "15,15",
+                "-v",
+                "lat,lon",
+                "sample.nc",
+            ],
+            timeout=90,
+        )
+        self.assertEqual(coordinates, {"lat": [22.12], "lon": [113.82]})
+
     def test_missing_core_variable_is_an_error(self):
         variables = [
             name for name in portal_lib.CORE_2D_VARS if name != "T2M"
@@ -279,22 +345,152 @@ class NetcdfValidationTests(unittest.TestCase):
         header = f"""
         dimensions:
             time = 1 ;
-            lat = 111 ;
-            lon = 152 ;
+            lat = 171 ;
+            lon = 234 ;
         variables:
             {declarations}
         """
         with (
             mock.patch.object(portal_lib, "netcdf_kind", return_value="netCDF-4"),
             mock.patch.object(portal_lib, "netcdf_header", return_value=header),
+            mock.patch.object(
+                portal_lib,
+                "netcdf_coordinates",
+                return_value=self.core_coordinates(),
+            ),
         ):
             result = portal_lib.validate_netcdf(
                 Path("sample.nc"),
-                "RUMI-GFS-MODEL-HRAIN2025-20250804000000.nc",
-                {"experiment": "GFS", "model": "MODEL", "event": "HRAIN2025"},
+                "RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+                {
+                    "experiment": "RUMI-GFS-FC",
+                    "model": "MODEL",
+                    "event": "HRAIN2025",
+                },
             )
 
         self.assertIn("Missing core 2D variables: T2M", result["errors"])
+
+    def test_filename_metadata_mismatch_is_an_error(self):
+        declarations = "\n".join(
+            f"float {name}(time, lat, lon) ;"
+            for name in portal_lib.CORE_2D_VARS
+        )
+        header = f"""
+        dimensions:
+            time = 1 ;
+            lat = 171 ;
+            lon = 234 ;
+        variables:
+            {declarations}
+        """
+        with (
+            mock.patch.object(portal_lib, "netcdf_kind", return_value="netCDF-4"),
+            mock.patch.object(portal_lib, "netcdf_header", return_value=header),
+            mock.patch.object(
+                portal_lib,
+                "netcdf_coordinates",
+                return_value=self.core_coordinates(),
+            ),
+        ):
+            result = portal_lib.validate_netcdf(
+                Path("sample.nc"),
+                "RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc",
+                {
+                    "experiment": "RUMI-ERA5-AN",
+                    "model": "WRF",
+                    "event": "HRAIN2025",
+                },
+            )
+
+        self.assertIn(
+            "File name experiment does not match the submitted metadata.",
+            result["errors"],
+        )
+        self.assertIn(
+            "File name model does not match the submitted metadata.",
+            result["errors"],
+        )
+
+    def test_previous_15_arc_second_grid_is_rejected(self):
+        declarations = "\n".join(
+            f"float {name}(time, lat, lon) ;"
+            for name in portal_lib.CORE_2D_VARS
+        )
+        header = f"""
+        dimensions:
+            time = 1 ;
+            lat = 111 ;
+            lon = 152 ;
+        variables:
+            {declarations}
+        """
+        old_spacing = 15 / 3600.0
+        old_coordinates = {
+            "lat": [22.12 + index * old_spacing for index in range(111)],
+            "lon": [113.82 + index * old_spacing for index in range(152)],
+        }
+        with (
+            mock.patch.object(portal_lib, "netcdf_kind", return_value="netCDF-4"),
+            mock.patch.object(portal_lib, "netcdf_header", return_value=header),
+            mock.patch.object(
+                portal_lib,
+                "netcdf_coordinates",
+                return_value=old_coordinates,
+            ),
+        ):
+            result = portal_lib.validate_netcdf(
+                Path("sample.nc"),
+                "RUMI-ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc",
+                {
+                    "experiment": "RUMI-ERA5-AN",
+                    "model": "WRF",
+                    "event": "MANGKHUT2018",
+                },
+            )
+
+        self.assertIn(
+            "Standard core grid dimensions must be 171 lat by 234 lon "
+            "(9.7 arc-seconds).",
+            result["errors"],
+        )
+
+    def test_archive_members_use_the_same_netcdf_validator(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "batch.zip"
+            member_name = (
+                "results/RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc"
+            )
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr(member_name, b"not-a-real-netcdf")
+                archive.writestr("technical-notes.txt", "test")
+
+            with mock.patch.object(
+                portal_lib,
+                "validate_netcdf",
+                return_value={
+                    "errors": ["Standard core grid dimensions must be 171 lat by 234 lon."],
+                    "warnings": [],
+                    "summary": {},
+                },
+            ) as validator:
+                result = portal_lib.validate_archive(
+                    archive_path,
+                    archive_path.name,
+                    {
+                        "experiment": "RUMI-GFS-FC",
+                        "model": "MPAS",
+                        "event": "HRAIN2025",
+                    },
+                )
+
+        validator.assert_called_once()
+        self.assertEqual(result["summary"]["validated_netcdf_files"], 1)
+        self.assertIn(
+            member_name
+            + ": Standard core grid dimensions must be 171 lat by 234 lon.",
+            result["errors"],
+        )
 
 
 if __name__ == "__main__":
