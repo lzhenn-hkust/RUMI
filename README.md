@@ -129,3 +129,24 @@ For model output, update `set_info()` and replace the synthetic data logic in
 The portal validates the filename interpretation, all core variables, NetCDF4
 format, exact 234 x 171 dimensions, and every latitude/longitude coordinate
 before accepting a submission.
+
+## Structured Archives
+
+Participants may upload one `.zip`, `.tar.gz`, or `.tgz` archive for an
+experiment. Every NetCDF file must be stored under a three-digit lead-time
+directory, and the directory must agree with the file's global
+`forecast_lead_time_hours` attribute.
+
+```text
+RUMI-GFS-FC-WRF-HRAIN2025/
+|-- lead_024h/
+|-- lead_048h/
+|-- lead_072h/
+|-- lead_096h/
+`-- lead_120h/
+```
+
+Each NetCDF member is checked with the same validator used for single-file
+uploads. Archive acceptance is all-or-nothing. Time fields are read from each
+NetCDF file, so they do not need to be entered separately in the archive upload
+form.

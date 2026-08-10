@@ -183,6 +183,13 @@ REQUIRED_GLOBAL_ATTRS = [
     "version",
 ]
 
+ARCHIVE_TIME_ATTRS = (
+    "simulation_start_time",
+    "initialization_time",
+    "forecast_initialization_time",
+    "forecast_lead_time_hours",
+)
+
 PHYSICS_ATTRS = [
     "microphysics_scheme",
     "cumulus_scheme",
@@ -205,6 +212,7 @@ RUMI_FILENAME_RE = re.compile(
     + "|".join(EVENTS.keys())
     + r")-(\d{14})(?:_([A-Za-z0-9._-]+))?(?:_v([0-9]{2,}))?\.nc$"
 )
+LEAD_DIRECTORY_RE = re.compile(r"^lead_(\d{3})h$", re.IGNORECASE)
 
 
 class PortalError(Exception):
@@ -673,8 +681,53 @@ def header_dim(header, name):
 
 
 def header_attr(header, name):
-    match = re.search(r":\s*" + re.escape(name) + r"\s*=\s*\"([^\"]*)\"", header)
-    return match.group(1) if match else None
+    match = re.search(
+        r":\s*" + re.escape(name) + r"\s*=\s*(?:\"([^\"]*)\"|([^;\r\n]+))\s*;",
+        header,
+    )
+    if not match:
+        return None
+    return match.group(1) if match.group(1) is not None else match.group(2).strip()
+
+
+def parse_lead_time_hours(value):
+    if value is None:
+        return None
+    match = re.match(r"^\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))", str(value))
+    if not match:
+        return None
+    suffix = str(value)[match.end():].strip().lower()
+    if suffix not in {
+        "",
+        "h",
+        "hr",
+        "hrs",
+        "hour",
+        "hours",
+        "b",
+        "s",
+        "us",
+        "l",
+        "ll",
+        "ul",
+        "ull",
+        "f",
+        "d",
+    }:
+        return None
+    hours = float(match.group(1))
+    if hours < 0 or not hours.is_integer():
+        return None
+    return int(hours)
+
+
+def archive_member_lead_hours(name):
+    matches = [
+        int(match.group(1))
+        for part in Path(name).parts
+        if (match := LEAD_DIRECTORY_RE.fullmatch(part))
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def validate_timestamp_in_event(timestamp_iso, event):
@@ -732,6 +785,9 @@ def validate_netcdf(path, filename, metadata):
     present_3d = [name for name in THREE_D_VARS if header_has_var(header, name)]
     summary["recommended_2d_count"] = len(present_recommended)
     summary["three_d_present"] = present_3d
+    summary["time_metadata"] = {
+        name: header_attr(header, name) for name in ARCHIVE_TIME_ATTRS
+    }
 
     lat = header_dim(header, "lat")
     lon = header_dim(header, "lon")
@@ -809,7 +865,10 @@ def validate_archive(path, filename, metadata):
         "archive_members": 0,
         "netcdf_files": 0,
         "validated_netcdf_files": 0,
+        "checked_netcdf_files": 0,
+        "passed_netcdf_files": 0,
         "documentation_files": 0,
+        "lead_time_folders": {},
     }
     lower = filename.lower()
     docs_ext = (".pdf", ".docx", ".txt", ".md")
@@ -846,8 +905,46 @@ def validate_archive(path, filename, metadata):
                 if temporary_path:
                     temporary_path.unlink(missing_ok=True)
 
+            member_errors = list(result["errors"])
+            time_metadata = result["summary"].get("time_metadata")
+            if time_metadata is not None:
+                missing_time_attrs = [
+                    name for name in ARCHIVE_TIME_ATTRS if not time_metadata.get(name)
+                ]
+                if missing_time_attrs:
+                    member_errors.append(
+                        "Structured archive member is missing time attributes: "
+                        + ", ".join(missing_time_attrs)
+                    )
+
+            folder_lead = archive_member_lead_hours(member_name)
+            if folder_lead is None:
+                member_errors.append(
+                    "NetCDF file must be stored under exactly one lead_NNNh directory."
+                )
+            else:
+                folder_name = f"lead_{folder_lead:03d}h"
+                lead_counts = summary["lead_time_folders"]
+                lead_counts[folder_name] = lead_counts.get(folder_name, 0) + 1
+                attr_lead = parse_lead_time_hours(
+                    (time_metadata or {}).get("forecast_lead_time_hours")
+                )
+                if attr_lead is None:
+                    member_errors.append(
+                        "Global attribute forecast_lead_time_hours must be a "
+                        "non-negative whole number."
+                    )
+                elif attr_lead != folder_lead:
+                    member_errors.append(
+                        f"Directory {folder_name} does not match global attribute "
+                        f"forecast_lead_time_hours={attr_lead}."
+                    )
+
             summary["validated_netcdf_files"] += 1
-            errors.extend(f"{member_name}: {message}" for message in result["errors"])
+            summary["checked_netcdf_files"] += 1
+            if not member_errors:
+                summary["passed_netcdf_files"] += 1
+            errors.extend(f"{member_name}: {message}" for message in member_errors)
             warnings.extend(
                 f"{member_name}: {message}" for message in result["warnings"]
             )

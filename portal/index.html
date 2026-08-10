@@ -92,7 +92,7 @@
               <input id="fileInput" name="file" type="file" accept=".nc,.zip,.tar.gz,.tgz" required>
               <div>
                 <strong>Select submission file</strong>
-                <span>.nc for single snapshots, or .zip/.tar.gz for batch bundles. Archives should contain RUMI-named .nc files and a technical document.</span>
+                <span id="fileModeHint">.nc for a single snapshot, or .zip/.tar.gz for a structured archive.</span>
               </div>
             </div>
 
@@ -128,16 +128,16 @@
               <label>Forcing update interval
                 <input name="forcing_update_interval" placeholder="1 hour">
               </label>
-              <label>Simulation start time
-                <input name="simulation_start_time" placeholder="2018-09-15T00:00:00Z" required>
+              <label class="single-file-time">Simulation start time
+                <input name="simulation_start_time" placeholder="2018-09-15T00:00:00Z" data-required-single="true" required>
               </label>
-              <label>Initialization time
-                <input name="initialization_time" placeholder="2018-09-15T00:00:00Z" required>
+              <label class="single-file-time">Initialization time
+                <input name="initialization_time" placeholder="2018-09-15T00:00:00Z" data-required-single="true" required>
               </label>
-              <label>Forecast initialization time
+              <label class="single-file-time">Forecast initialization time
                 <input name="forecast_initialization_time" placeholder="2018-09-15T00:00:00Z">
               </label>
-              <label>Forecast lead time
+              <label class="single-file-time">Forecast lead time
                 <input name="forecast_lead_time_hours" placeholder="0 hours">
               </label>
               <label>Horizontal resolution
@@ -321,6 +321,7 @@
               <dt>Frequency</dt><dd>hourly minimum, one time snapshot per file</dd>
               <dt>Format</dt><dd>NetCDF4, CF-1.8, _FillValue = -9999.0</dd>
               <dt>Name</dt><dd>&lt;RUMI experiment&gt;-&lt;Model&gt;-&lt;Event&gt;-&lt;YYYYMMDDHHMMSS&gt;.nc</dd>
+              <dt>Archives</dt><dd>one experiment per ZIP/TAR; place every NetCDF under lead_NNNh</dd>
               <dt>3D fields</dt><dd>850, 500, and 200 hPa; recommended to archive, not currently required</dd>
             </dl>
           </section>
@@ -330,6 +331,6 @@
   </main>
 
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="assets/app.js?v=20260730-protocol-v21"></script>
+  <script src="assets/app.js?v=20260810-archive-mvp"></script>
 </body>
 </html>

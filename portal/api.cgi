@@ -774,7 +774,7 @@ def handle_upload_finish(con):
         / row["event"]
     )
     final_path = final_dir / (row["upload_id"] + "_" + safe_file_name(row["file_name"]))
-    status = "received_manual_review" if row["file_kind"] in ("zip", "tar") else "validated"
+    status = "validated"
     try:
         final_dir.mkdir(parents=True, exist_ok=True)
         temp_path.replace(final_path)

@@ -88,6 +88,7 @@ class UploadWorkflowTests(unittest.TestCase):
         status,
         content=b"sample",
         file_name="RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+        file_kind="netcdf",
         sha256=None,
         replaces_upload_id=None,
     ):
@@ -103,7 +104,7 @@ class UploadWorkflowTests(unittest.TestCase):
                 file_kind, status, experiment, model, event, metadata_json,
                 temp_path, sha256, replaces_upload_id, created_at, updated_at
             )
-            VALUES (?, 1, ?, ?, ?, 'netcdf', ?, 'RUMI-GFS-FC', 'MODEL',
+            VALUES (?, 1, ?, ?, ?, ?, ?, 'RUMI-GFS-FC', 'MODEL',
                     'HRAIN2025', ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -111,6 +112,7 @@ class UploadWorkflowTests(unittest.TestCase):
                 file_name,
                 len(content),
                 len(content),
+                file_kind,
                 status,
                 json.dumps(
                     {
@@ -181,6 +183,27 @@ class UploadWorkflowTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["replaces_upload_id"], "existing-upload")
 
+    def test_archive_start_does_not_require_time_form_fields(self):
+        payload = {
+            "file_name": "RUMI-GFS-FC-MODEL-HRAIN2025.zip",
+            "file_size": 123,
+            "experiment": "RUMI-GFS-FC",
+            "model": "MODEL",
+            "event": "HRAIN2025",
+        }
+
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            result = portal_api.handle_upload_start(self.con)
+
+        row = self.con.execute(
+            "SELECT file_kind, metadata_json FROM uploads WHERE upload_id = ?",
+            (result["upload_id"],),
+        ).fetchone()
+        metadata = json.loads(row["metadata_json"])
+        self.assertEqual(row["file_kind"], "zip")
+        self.assertEqual(metadata["simulation_start_time"], "")
+        self.assertEqual(metadata["forecast_lead_time_hours"], "")
+
     def test_identical_content_is_rejected_as_duplicate(self):
         digest = portal_lib.hashlib.sha256(b"same").hexdigest()
         self.insert_upload(
@@ -236,6 +259,30 @@ class UploadWorkflowTests(unittest.TestCase):
         self.assertEqual(old_status, "superseded")
         self.assertTrue(Path(stored_path).exists())
 
+    def test_valid_archive_is_marked_validated(self):
+        self.insert_upload(
+            "archive-upload",
+            "receiving",
+            content=b"archive",
+            file_name="RUMI-GFS-FC-MODEL-HRAIN2025.zip",
+            file_kind="zip",
+        )
+
+        result = self.finish(
+            "archive-upload",
+            {
+                "errors": [],
+                "warnings": [],
+                "summary": {
+                    "checked_netcdf_files": 5,
+                    "passed_netcdf_files": 5,
+                },
+            },
+        )
+
+        self.assertEqual(result["upload"]["status"], "validated")
+        self.assertEqual(result["upload"]["file_kind"], "zip")
+
     def test_finalization_error_becomes_terminal_server_error(self):
         self.insert_upload("blocked-upload", "receiving", content=b"valid")
         blocked_path = self.data_dir / "not-a-directory"
@@ -289,6 +336,37 @@ class NetcdfValidationTests(unittest.TestCase):
             ],
         }
 
+    def structured_archive_result(self, member_name, lead_time):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_path = Path(temp_dir) / "batch.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr(member_name, b"not-a-real-netcdf")
+            with mock.patch.object(
+                portal_lib,
+                "validate_netcdf",
+                return_value={
+                    "errors": [],
+                    "warnings": [],
+                    "summary": {
+                        "time_metadata": {
+                            "simulation_start_time": "2025-08-03T00:00:00Z",
+                            "initialization_time": "2025-08-03T00:00:00Z",
+                            "forecast_initialization_time": "2025-08-03T00:00:00Z",
+                            "forecast_lead_time_hours": lead_time,
+                        },
+                    },
+                },
+            ):
+                return portal_lib.validate_archive(
+                    archive_path,
+                    archive_path.name,
+                    {
+                        "experiment": "RUMI-GFS-FC",
+                        "model": "WRF",
+                        "event": "HRAIN2025",
+                    },
+                )
+
     def test_filename_parses_complete_experiment_and_model(self):
         parsed = portal_lib.parse_rumi_filename(
             "RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc"
@@ -336,6 +414,13 @@ class NetcdfValidationTests(unittest.TestCase):
             timeout=90,
         )
         self.assertEqual(coordinates, {"lat": [22.12], "lon": [113.82]})
+
+    def test_numeric_global_attribute_lead_time_is_supported(self):
+        header = ':forecast_lead_time_hours = 24LL ;'
+
+        value = portal_lib.header_attr(header, "forecast_lead_time_hours")
+
+        self.assertEqual(portal_lib.parse_lead_time_hours(value), 24)
 
     def test_missing_core_variable_is_an_error(self):
         variables = [
@@ -459,7 +544,8 @@ class NetcdfValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             archive_path = Path(temp_dir) / "batch.zip"
             member_name = (
-                "results/RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc"
+                "results/lead_024h/"
+                "RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc"
             )
             with zipfile.ZipFile(archive_path, "w") as archive:
                 archive.writestr(member_name, b"not-a-real-netcdf")
@@ -471,7 +557,14 @@ class NetcdfValidationTests(unittest.TestCase):
                 return_value={
                     "errors": ["Standard core grid dimensions must be 171 lat by 234 lon."],
                     "warnings": [],
-                    "summary": {},
+                    "summary": {
+                        "time_metadata": {
+                            "simulation_start_time": "2025-08-03T00:00:00Z",
+                            "initialization_time": "2025-08-03T00:00:00Z",
+                            "forecast_initialization_time": "2025-08-03T00:00:00Z",
+                            "forecast_lead_time_hours": "24",
+                        },
+                    },
                 },
             ) as validator:
                 result = portal_lib.validate_archive(
@@ -489,6 +582,46 @@ class NetcdfValidationTests(unittest.TestCase):
         self.assertIn(
             member_name
             + ": Standard core grid dimensions must be 171 lat by 234 lon.",
+            result["errors"],
+        )
+
+    def test_structured_archive_accepts_matching_lead_folder(self):
+        member_name = (
+            "RUMI-GFS-FC-WRF-HRAIN2025/lead_024h/"
+            "RUMI-GFS-FC-WRF-HRAIN2025-20250804000000.nc"
+        )
+        result = self.structured_archive_result(member_name, "24 hours")
+
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["summary"]["checked_netcdf_files"], 1)
+        self.assertEqual(result["summary"]["passed_netcdf_files"], 1)
+        self.assertEqual(result["summary"]["lead_time_folders"], {"lead_024h": 1})
+
+    def test_structured_archive_rejects_lead_time_mismatch(self):
+        member_name = (
+            "RUMI-GFS-FC-WRF-HRAIN2025/lead_024h/"
+            "RUMI-GFS-FC-WRF-HRAIN2025-20250804000000.nc"
+        )
+        result = self.structured_archive_result(member_name, "48")
+
+        self.assertEqual(result["summary"]["passed_netcdf_files"], 0)
+        self.assertIn(
+            member_name
+            + ": Directory lead_024h does not match global attribute "
+            "forecast_lead_time_hours=48.",
+            result["errors"],
+        )
+
+    def test_structured_archive_requires_lead_directory(self):
+        member_name = (
+            "RUMI-GFS-FC-WRF-HRAIN2025/"
+            "RUMI-GFS-FC-WRF-HRAIN2025-20250804000000.nc"
+        )
+        result = self.structured_archive_result(member_name, "24")
+
+        self.assertIn(
+            member_name
+            + ": NetCDF file must be stored under exactly one lead_NNNh directory.",
             result["errors"],
         )
 

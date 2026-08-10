@@ -308,8 +308,43 @@ function parseFileName(name) {
   };
 }
 
+function isArchiveFile(file) {
+  return Boolean(file && /(?:\.zip|\.tar\.gz|\.tgz)$/i.test(file.name));
+}
+
+function parseArchiveName(name) {
+  if (!state.constants) return null;
+  const events = Object.keys(state.constants.events).join("|");
+  const pattern = new RegExp(`^RUMI-([A-Za-z0-9._]+(?:-[A-Za-z0-9._]+)*)-(AN|FC)-([A-Za-z0-9._]+)-(${events})(?:_v([0-9]{2,}))?(?:\\.zip|\\.tar\\.gz|\\.tgz)$`);
+  const match = name.match(pattern);
+  if (!match) return null;
+  return {
+    experiment: `RUMI-${match[1]}-${match[2]}`,
+    model: match[3],
+    event: match[4],
+    member: "",
+    version: match[5] ? `v${match[5]}` : "",
+  };
+}
+
+function setUploadMode(file) {
+  const archive = isArchiveFile(file);
+  const form = $("#uploadForm");
+  $$(".single-file-time", form).forEach((label) => {
+    label.classList.toggle("hidden", archive);
+    const input = $("input", label);
+    input.disabled = archive;
+    input.required = !archive && input.dataset.requiredSingle === "true";
+  });
+  $("#fileModeHint").textContent = archive
+    ? "Structured archive: place each RUMI-named NetCDF under a lead_NNNh directory."
+    : ".nc for a single snapshot, or .zip/.tar.gz for a structured archive.";
+}
+
 function autoFillFromFile(file) {
-  const parsed = parseFileName(file.name);
+  const parsed = isArchiveFile(file)
+    ? parseArchiveName(file.name)
+    : parseFileName(file.name);
   if (!parsed) return;
   const form = $("#uploadForm");
   form.elements.experiment.value = parsed.experiment;
@@ -345,11 +380,19 @@ function showUploadMessage(title, message, type = "warning", errors = []) {
 
 function showUploadOutcome(upload) {
   const errors = upload.validation?.errors || [];
+  const summary = upload.validation?.summary || {};
   const status = upload.status;
   if (status === "validated") {
+    const archive = ["zip", "tar"].includes(upload.file_kind);
+    const checked = summary.checked_netcdf_files ?? summary.validated_netcdf_files;
+    const passed = summary.passed_netcdf_files ?? checked;
+    const leadFolders = Object.keys(summary.lead_time_folders || {}).length;
+    const message = archive && Number.isFinite(checked)
+      ? `${upload.file_name} passed structured archive validation: ${passed}/${checked} NetCDF files across ${leadFolders} lead-time folders.`
+      : `${upload.file_name} passed validation and is now stored as the active submission.`;
     showUploadMessage(
       "Submission accepted",
-      `${upload.file_name} passed validation and is now stored as the active submission.`,
+      message,
       "success",
     );
     setProgress(upload.file_size, upload.file_size, "Accepted");
@@ -581,6 +624,7 @@ function bindEvents() {
   $("#uploadForm").addEventListener("submit", submitUpload);
   $("#fileInput").addEventListener("change", (event) => {
     const file = event.currentTarget.files[0];
+    setUploadMode(file);
     if (file) autoFillFromFile(file);
   });
   const dropzone = $(".dropzone");
@@ -600,6 +644,7 @@ function bindEvents() {
     const files = event.dataTransfer.files;
     if (!files.length) return;
     fileInput.files = files;
+    setUploadMode(files[0]);
     autoFillFromFile(files[0]);
   });
   $("#refreshUploadsBtn").addEventListener("click", loadUploads);
