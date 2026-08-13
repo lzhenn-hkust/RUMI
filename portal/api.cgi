@@ -736,11 +736,18 @@ def handle_upload_finish(con):
         f"""
         SELECT * FROM uploads
         WHERE user_id = ? AND sha256 = ? AND id != ?
+          AND upload_id != COALESCE(?, '')
           AND status IN ({accepted_placeholders})
         ORDER BY created_at DESC
         LIMIT 1
         """,
-        (user["id"], digest, row["id"], *ACCEPTED_UPLOAD_STATUSES),
+        (
+            user["id"],
+            digest,
+            row["id"],
+            row["replaces_upload_id"],
+            *ACCEPTED_UPLOAD_STATUSES,
+        ),
     ).fetchone()
     if duplicate:
         validation["errors"] = [

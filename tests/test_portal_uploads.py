@@ -231,6 +231,31 @@ class UploadWorkflowTests(unittest.TestCase):
             "accepted-upload",
         )
 
+    def test_identical_content_can_replace_the_selected_upload(self):
+        digest = portal_lib.hashlib.sha256(b"same").hexdigest()
+        self.insert_upload(
+            "existing-upload",
+            "validated",
+            content=b"same",
+            sha256=digest,
+        )
+        self.insert_upload(
+            "replacement-upload",
+            "receiving",
+            content=b"same",
+            replaces_upload_id="existing-upload",
+        )
+
+        result = self.finish(
+            "replacement-upload", {"errors": [], "warnings": [], "summary": {}}
+        )
+        old_status = self.con.execute(
+            "SELECT status FROM uploads WHERE upload_id = 'existing-upload'"
+        ).fetchone()["status"]
+
+        self.assertEqual(result["upload"]["status"], "validated")
+        self.assertEqual(old_status, "superseded")
+
     def test_valid_replacement_supersedes_existing_upload(self):
         self.insert_upload(
             "existing-upload",
@@ -320,6 +345,39 @@ class UploadWorkflowTests(unittest.TestCase):
         result = portal_api.handle_uploads(self.con)
 
         self.assertNotIn("uploader", result["uploads"][0])
+
+    def test_modeler_can_delete_own_upload(self):
+        temp_path = self.insert_upload("own-upload", "receiving")
+        with mock.patch.object(
+            portal_api, "read_json", return_value={"upload_id": "own-upload"}
+        ):
+            result = portal_api.handle_upload_delete(self.con)
+        row = self.con.execute(
+            "SELECT status, temp_path FROM uploads WHERE upload_id = 'own-upload'"
+        ).fetchone()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(row["status"], "deleted")
+        self.assertIsNone(row["temp_path"])
+        self.assertFalse(temp_path.exists())
+
+    def test_only_admin_can_delete_another_users_upload(self):
+        temp_path = self.insert_upload("other-upload", "receiving")
+        self.user["id"] = 2
+        payload = {"upload_id": "other-upload"}
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_upload_delete(self.con)
+
+        self.assertEqual(raised.exception.status, 403)
+        self.assertTrue(temp_path.exists())
+
+        self.user["role"] = "admin"
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            result = portal_api.handle_upload_delete(self.con)
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(temp_path.exists())
 
 
 class NetcdfValidationTests(unittest.TestCase):

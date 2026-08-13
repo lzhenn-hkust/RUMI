@@ -194,6 +194,9 @@ async function loadUploads() {
           </div>
         </td>`
       : "";
+    const actions = upload.status === "deleted"
+      ? ""
+      : `<button class="danger-text" type="button" data-upload-action="delete" data-upload-id="${escapeHtml(upload.upload_id)}">Delete</button>`;
     return `<tr>
       <td data-label="File">${fileInfo}</td>
       ${uploaderCell}
@@ -202,9 +205,10 @@ async function loadUploads() {
       <td data-label="Status">${statusPill(upload.status)}</td>
       <td data-label="Validation">${validationDetails(upload.validation) || escapeHtml(validation)}</td>
       <td data-label="Updated">${escapeHtml(upload.updated_at || upload.created_at)}</td>
+      <td data-label="Actions"><div class="row-actions">${actions}</div></td>
     </tr>`;
   });
-  const columns = isAdmin ? 7 : 6;
+  const columns = isAdmin ? 8 : 7;
   $("#uploadsBody").innerHTML = rows.join("") || `<tr><td colspan="${columns}" class="muted">No submissions yet.</td></tr>`;
   return data.uploads;
 }
@@ -215,6 +219,20 @@ async function loadAdmin() {
   state.adminLoaded = true;
   renderUsers(data.users);
   $("#whitelistCount").textContent = `${data.whitelist.length} whitelisted emails`;
+}
+
+async function deleteUpload(uploadId) {
+  const upload = state.uploads.find((item) => item.upload_id === uploadId);
+  if (!upload) return false;
+  const uploader = upload.uploader?.email ? ` uploaded by ${upload.uploader.email}` : "";
+  const confirmed = window.confirm(
+    `Delete ${upload.file_name}${uploader}? The stored file will be removed, but its audit record will remain.`,
+  );
+  if (!confirmed) return false;
+  await api("upload_delete", {upload_id: uploadId});
+  await loadUploads();
+  toast("Submission deleted");
+  return true;
 }
 
 function renderUsers(users) {
@@ -648,6 +666,18 @@ function bindEvents() {
     autoFillFromFile(files[0]);
   });
   $("#refreshUploadsBtn").addEventListener("click", loadUploads);
+  $("#uploadsBody").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-upload-action]");
+    if (!button || button.dataset.uploadAction !== "delete") return;
+    button.disabled = true;
+    try {
+      const deleted = await deleteUpload(button.dataset.uploadId);
+      if (!deleted) button.disabled = false;
+    } catch (err) {
+      button.disabled = false;
+      toast(err.message, "error");
+    }
+  });
   $("#refreshAdminBtn").addEventListener("click", () => {
     state.adminLoaded = false;
     loadAdmin();

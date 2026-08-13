@@ -560,6 +560,12 @@ th {
   font-weight: 750;
 }
 
+.row-actions .danger-text {
+  color: var(--red);
+  background: #fff0f0;
+  border: 1px solid #efc6c6;
+}
+
 .admin-grid {
   grid-template-columns: minmax(0, 1fr) 320px;
   align-items: start;
