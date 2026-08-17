@@ -227,23 +227,7 @@
             <h2>Submissions</h2>
             <button id="refreshUploadsBtn" class="ghost" type="button">Refresh</button>
           </div>
-          <div class="table-wrap">
-            <table class="submissions-table">
-              <thead>
-                <tr>
-                  <th>File</th>
-                  <th class="admin-only hidden">Uploader</th>
-                  <th>Event</th>
-                  <th>Model</th>
-                  <th>Status</th>
-                  <th>Validation</th>
-                  <th>Updated</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody id="uploadsBody"></tbody>
-            </table>
-          </div>
+          <div id="uploadsBody" class="submission-groups"></div>
         </div>
       </section>
 
@@ -332,6 +316,6 @@
   </main>
 
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="assets/app.js?v=20260813-submission-actions"></script>
+  <script src="assets/app.js?v=20260817-institution-folders"></script>
 </body>
 </html>

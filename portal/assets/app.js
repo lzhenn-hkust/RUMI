@@ -169,6 +169,103 @@ function statusPill(status) {
   return `<span class="status ${escapeHtml(safeStatus)}">${escapeHtml(String(status || "").replace(/_/g, " "))}</span>`;
 }
 
+function uploaderForUpload(upload) {
+  if (upload.uploader?.name || upload.uploader?.email) return upload.uploader;
+  return {
+    name: state.user?.name || "Current user",
+    email: state.user?.email || "",
+  };
+}
+
+function groupUploads(uploads, keyFunction) {
+  const groups = new Map();
+  uploads.forEach((upload) => {
+    const key = keyFunction(upload);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(upload);
+  });
+  return groups;
+}
+
+function submissionRows(uploads) {
+  return uploads.map((upload) => {
+    const validation = validationText(upload.validation);
+    const fileInfo = `${escapeHtml(upload.file_name)}<br><span class="muted">${escapeHtml(bytes(upload.file_size))}</span>`;
+    const actions = upload.status === "deleted"
+      ? ""
+      : `<button class="danger-text" type="button" data-upload-action="delete" data-upload-id="${escapeHtml(upload.upload_id)}">Delete</button>`;
+    return `<tr>
+      <td data-label="File">${fileInfo}</td>
+      <td data-label="Event">${escapeHtml(upload.event)}</td>
+      <td data-label="Model">${escapeHtml(upload.model)}</td>
+      <td data-label="Status">${statusPill(upload.status)}</td>
+      <td data-label="Validation">${validationDetails(upload.validation) || escapeHtml(validation)}</td>
+      <td data-label="Updated">${escapeHtml(upload.updated_at || upload.created_at)}</td>
+      <td data-label="Actions"><div class="row-actions">${actions}</div></td>
+    </tr>`;
+  }).join("");
+}
+
+function submissionTable(uploads) {
+  return `<div class="table-wrap">
+    <table class="submissions-table">
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Event</th>
+          <th>Model</th>
+          <th>Status</th>
+          <th>Validation</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>${submissionRows(uploads)}</tbody>
+    </table>
+  </div>`;
+}
+
+function submissionGroups(uploads) {
+  const institutions = groupUploads(
+    uploads,
+    (upload) => upload.institution || "Unknown institution",
+  );
+  if (!institutions.size) return `<p class="submission-empty muted">No submissions yet.</p>`;
+
+  return Array.from(institutions.entries()).map(([institution, institutionUploads]) => {
+    const uploaders = groupUploads(institutionUploads, (upload) => {
+      const uploader = uploaderForUpload(upload);
+      return `${uploader.email || "unknown"}\u0000${uploader.name || "Unknown uploader"}`;
+    });
+    const uploaderSections = Array.from(uploaders.values()).map((uploaderUploads) => {
+      const uploader = uploaderForUpload(uploaderUploads[0]);
+      const identity = [uploader.name, uploader.email].filter(Boolean).join(" · ") || "Unknown uploader";
+      const count = uploaderUploads.length;
+      return `<details class="submission-group submission-uploader-group">
+        <summary>
+          <span class="submission-summary-copy">
+            <span class="submission-summary-label">Uploader</span>
+            <strong>${escapeHtml(identity)}</strong>
+          </span>
+          <span class="submission-count">${count} submission${count === 1 ? "" : "s"}</span>
+        </summary>
+        <div class="submission-group-body">${submissionTable(uploaderUploads)}</div>
+      </details>`;
+    }).join("");
+    const count = institutionUploads.length;
+    return `<details class="submission-group submission-institution-group">
+      <summary>
+        <span class="submission-summary-copy">
+          <span class="submission-summary-label">Institution</span>
+          <strong>${escapeHtml(institution)}</strong>
+        </span>
+        <span class="submission-count">${count} submission${count === 1 ? "" : "s"}</span>
+      </summary>
+      <div class="submission-group-body submission-uploader-groups">${uploaderSections}</div>
+    </details>`;
+  }).join("");
+}
+
 async function loadMe() {
   const data = await api("me");
   state.user = data.user;
@@ -180,36 +277,7 @@ async function loadUploads() {
   if (!state.user) return;
   const data = await api("uploads");
   state.uploads = data.uploads;
-  const isAdmin = state.user.role === "admin";
-  const rows = data.uploads.map((upload) => {
-    const validation = validationText(upload.validation);
-    const fileInfo = `${escapeHtml(upload.file_name)}<br><span class="muted">${escapeHtml(bytes(upload.file_size))}</span>`;
-    const uploader = upload.uploader || {};
-    const uploaderCell = isAdmin
-      ? `<td data-label="Uploader">
-          <div class="uploader-identity">
-            <strong>${escapeHtml(uploader.name || "Unknown user")}</strong>
-            <span class="uploader-email">${escapeHtml(uploader.email || "")}</span>
-            <span class="muted">${escapeHtml(uploader.institution || "")}</span>
-          </div>
-        </td>`
-      : "";
-    const actions = upload.status === "deleted"
-      ? ""
-      : `<button class="danger-text" type="button" data-upload-action="delete" data-upload-id="${escapeHtml(upload.upload_id)}">Delete</button>`;
-    return `<tr>
-      <td data-label="File">${fileInfo}</td>
-      ${uploaderCell}
-      <td data-label="Event">${escapeHtml(upload.event)}</td>
-      <td data-label="Model">${escapeHtml(upload.model)}</td>
-      <td data-label="Status">${statusPill(upload.status)}</td>
-      <td data-label="Validation">${validationDetails(upload.validation) || escapeHtml(validation)}</td>
-      <td data-label="Updated">${escapeHtml(upload.updated_at || upload.created_at)}</td>
-      <td data-label="Actions"><div class="row-actions">${actions}</div></td>
-    </tr>`;
-  });
-  const columns = isAdmin ? 8 : 7;
-  $("#uploadsBody").innerHTML = rows.join("") || `<tr><td colspan="${columns}" class="muted">No submissions yet.</td></tr>`;
+  $("#uploadsBody").innerHTML = submissionGroups(data.uploads);
   return data.uploads;
 }
 

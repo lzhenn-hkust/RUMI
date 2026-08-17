@@ -100,11 +100,11 @@ class UploadWorkflowTests(unittest.TestCase):
         self.con.execute(
             """
             INSERT INTO uploads(
-                upload_id, user_id, file_name, file_size, received_bytes,
+                upload_id, user_id, institution, file_name, file_size, received_bytes,
                 file_kind, status, experiment, model, event, metadata_json,
                 temp_path, sha256, replaces_upload_id, created_at, updated_at
             )
-            VALUES (?, 1, ?, ?, ?, ?, ?, 'RUMI-GFS-FC', 'MODEL',
+            VALUES (?, 1, 'HKUST', ?, ?, ?, ?, ?, 'RUMI-GFS-FC', 'MODEL',
                     'HRAIN2025', ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -196,13 +196,15 @@ class UploadWorkflowTests(unittest.TestCase):
             result = portal_api.handle_upload_start(self.con)
 
         row = self.con.execute(
-            "SELECT file_kind, metadata_json FROM uploads WHERE upload_id = ?",
+            "SELECT file_kind, institution, metadata_json FROM uploads WHERE upload_id = ?",
             (result["upload_id"],),
         ).fetchone()
         metadata = json.loads(row["metadata_json"])
         self.assertEqual(row["file_kind"], "zip")
         self.assertEqual(metadata["simulation_start_time"], "")
         self.assertEqual(metadata["forecast_lead_time_hours"], "")
+
+        self.assertEqual(row["institution"], "HKUST")
 
     def test_identical_content_is_rejected_as_duplicate(self):
         digest = portal_lib.hashlib.sha256(b"same").hexdigest()
@@ -283,6 +285,10 @@ class UploadWorkflowTests(unittest.TestCase):
         self.assertEqual(result["upload"]["status"], "validated")
         self.assertEqual(old_status, "superseded")
         self.assertTrue(Path(stored_path).exists())
+        self.assertEqual(
+            Path(stored_path).parent.relative_to(self.submissions_dir).parts,
+            ("hkust", "rumi-gfs-fc", "model", "HRAIN2025"),
+        )
 
     def test_valid_archive_is_marked_validated(self):
         self.insert_upload(
@@ -338,6 +344,18 @@ class UploadWorkflowTests(unittest.TestCase):
                 "institution": "HKUST",
             },
         )
+        self.assertEqual(result["uploads"][0]["institution"], "HKUST")
+
+    def test_submission_institution_is_a_historical_snapshot(self):
+        self.insert_upload("snapshot-upload", "rejected")
+        self.con.execute(
+            "UPDATE users SET institution = 'Changed Institution' WHERE id = 1"
+        )
+        self.con.commit()
+
+        result = portal_api.handle_uploads(self.con)
+
+        self.assertEqual(result["uploads"][0]["institution"], "HKUST")
 
     def test_modeler_upload_list_does_not_expose_uploader_identity(self):
         self.insert_upload("modeler-visible-upload", "rejected")
@@ -378,6 +396,52 @@ class UploadWorkflowTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertFalse(temp_path.exists())
+
+
+class SchemaMigrationTests(unittest.TestCase):
+    def test_legacy_uploads_receive_institution_snapshot(self):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, institution TEXT)")
+        con.execute("INSERT INTO users(id, institution) VALUES (1, 'HKUST')")
+        con.execute(
+            """
+            CREATE TABLE uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                upload_id TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,
+                file_name TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                received_bytes INTEGER NOT NULL DEFAULT 0,
+                file_kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                experiment TEXT NOT NULL,
+                model TEXT NOT NULL,
+                event TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO uploads(
+                upload_id, user_id, file_name, file_size, file_kind, status,
+                experiment, model, event, metadata_json, created_at, updated_at
+            )
+            VALUES ('legacy-upload', 1, 'legacy.nc', 1, 'netcdf', 'validated',
+                    'RUMI-GFS-FC', 'MODEL', 'HRAIN2025', '{}', 'now', 'now')
+            """
+        )
+
+        portal_lib.init_schema(con)
+
+        row = con.execute(
+            "SELECT institution FROM uploads WHERE upload_id = 'legacy-upload'"
+        ).fetchone()
+        self.assertEqual(row["institution"], "HKUST")
+        con.close()
 
 
 class NetcdfValidationTests(unittest.TestCase):

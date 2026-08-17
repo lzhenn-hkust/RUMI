@@ -150,3 +150,19 @@ Each NetCDF member is checked with the same validator used for single-file
 uploads. Archive acceptance is all-or-nothing. Time fields are read from each
 NetCDF file, so they do not need to be entered separately in the archive upload
 form.
+
+## Portal Storage Organization
+
+Accepted uploads are indexed in SQLite and stored privately under the following
+directory structure:
+
+```text
+submissions/<institution>/<experiment>/<model>/<event>/<upload_id>_<file-name>
+```
+
+Institution, experiment, model, and event make the files easy to browse and
+batch-process, while the upload ID prevents filename collisions. Institution
+is also stored as a snapshot on each upload record, so changing a user's
+profile later does not change the historical attribution or storage location.
+Older submissions retain their original storage paths and remain accessible
+through the database index.

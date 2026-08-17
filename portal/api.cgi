@@ -598,15 +598,16 @@ def handle_upload_start(con):
     con.execute(
         """
         INSERT INTO uploads(
-            upload_id, user_id, file_name, file_size, received_bytes, file_kind,
+            upload_id, user_id, institution, file_name, file_size, received_bytes, file_kind,
             status, experiment, model, event, timestamp_utc, member, version,
             metadata_json, temp_path, replaces_upload_id, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, 0, ?, 'receiving', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 0, ?, 'receiving', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             upload_id,
             user["id"],
+            user["institution"],
             file_name,
             size,
             kind,
@@ -777,6 +778,7 @@ def handle_upload_finish(con):
     final_dir = (
         SUBMISSIONS_DIR
         / slugify(user["institution"])
+        / slugify(row["experiment"])
         / slugify(row["model"])
         / row["event"]
     )

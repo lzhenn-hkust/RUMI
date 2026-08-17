@@ -474,6 +474,88 @@ form.panel,
   overflow-x: auto;
 }
 
+.submission-groups,
+.submission-uploader-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.submission-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.submission-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  padding: 13px 15px;
+  color: #263a42;
+}
+
+.submission-group > summary::-webkit-details-marker {
+  color: var(--teal-dark);
+}
+
+.submission-group > summary:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: -2px;
+}
+
+.submission-summary-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.submission-summary-label {
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.submission-summary-copy strong {
+  overflow-wrap: anywhere;
+}
+
+.submission-count {
+  flex: 0 0 auto;
+  color: var(--teal-dark);
+  font-size: .82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.submission-group-body {
+  padding: 0 12px 12px;
+}
+
+.submission-uploader-group {
+  background: #fff;
+}
+
+.submission-uploader-group > summary {
+  padding: 11px 13px;
+}
+
+.submission-uploader-group .submission-group-body {
+  padding: 0 10px 10px;
+}
+
+.submission-uploader-group .table-wrap {
+  border-top: 1px solid var(--line);
+}
+
+.submission-empty {
+  margin: 0;
+  padding: 14px 0;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

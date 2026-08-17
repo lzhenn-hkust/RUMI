@@ -305,6 +305,7 @@ def init_schema(con):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             upload_id TEXT UNIQUE NOT NULL,
             user_id INTEGER NOT NULL,
+            institution TEXT NOT NULL,
             file_name TEXT NOT NULL,
             file_size INTEGER NOT NULL,
             received_bytes INTEGER NOT NULL DEFAULT 0,
@@ -352,8 +353,26 @@ def init_schema(con):
     upload_columns = {
         row["name"] for row in con.execute("PRAGMA table_info(uploads)").fetchall()
     }
+    if "institution" not in upload_columns:
+        con.execute("ALTER TABLE uploads ADD COLUMN institution TEXT")
+        con.execute(
+            """
+            UPDATE uploads
+            SET institution = (
+                SELECT institution FROM users WHERE users.id = uploads.user_id
+            )
+            WHERE institution IS NULL OR institution = ''
+            """
+        )
     if "replaces_upload_id" not in upload_columns:
         con.execute("ALTER TABLE uploads ADD COLUMN replaces_upload_id TEXT")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_uploads_institution ON uploads(institution)")
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_uploads_institution_event
+            ON uploads(institution, event)
+        """
+    )
     con.commit()
 
 
@@ -1024,6 +1043,7 @@ def upload_record_public(row, include_validation=True):
         "id": row["id"],
         "upload_id": row["upload_id"],
         "user_id": row["user_id"],
+        "institution": row.get("institution") or row.get("uploader_institution") or "",
         "file_name": row["file_name"],
         "file_size": row["file_size"],
         "received_bytes": row["received_bytes"],
