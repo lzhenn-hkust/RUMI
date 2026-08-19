@@ -784,8 +784,14 @@ def validate_archive(path, filename, metadata, progress=None):
                     ) as temporary:
                         shutil.copyfileobj(source, temporary, length=1024 * 1024)
                         temporary_path = Path(temporary.name)
+                # The experiment is a property of the directory the file sits
+                # in, not of the archive: one archive carries several. Passing
+                # the archive-level value here would compare every file against
+                # the "(archive)" placeholder and reject the whole submission.
+                member_metadata = dict(metadata)
+                member_metadata["experiment"] = placement["experiment"]
                 result = validate_netcdf(
-                    temporary_path, placement["file_name"], metadata
+                    temporary_path, placement["file_name"], member_metadata
                 )
             except (OSError, RuntimeError, ValueError) as exc:
                 errors.add(f"NetCDF file could not be read: {exc}", member_name)

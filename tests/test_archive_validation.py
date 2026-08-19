@@ -581,3 +581,90 @@ class ArchiveFlowTests(RumiTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RealNetcdfArchiveTests(unittest.TestCase):
+    """Drive validate_archive with the real reader, not a mocked one.
+
+    Every other archive test patches ``validate_netcdf`` so it can run fast and
+    without a NetCDF toolchain. That blind spot let a real defect ship: the
+    portal stores ``experiment = "(archive)"`` for archive uploads, passed that
+    archive-level metadata down to every member file, and so compared each
+    file's ``ERA5-AN`` against the placeholder and rejected every submission.
+    The structure checks and the local validator both passed, so nothing else
+    would have caught it. This test opens actual NetCDF files.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            portal_lib.ncdump_executable()
+        except Exception as exc:  # noqa: BLE001 - any failure means no toolchain
+            raise unittest.SkipTest(f"no usable ncdump: {exc}")
+        try:
+            import netCDF4  # noqa: F401, PLC0415
+        except ImportError:
+            raise unittest.SkipTest("netCDF4 is needed to write the fixture")
+        sys.path.insert(0, str(ROOT / "tests"))
+        from fixtures.make_fixture_archive import make_fixture  # noqa: PLC0415
+
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.result = make_fixture(
+            cls._tmp.name,
+            hours=4,
+            real_netcdf=True,
+            archive="tar.gz",
+        )
+        cls.archive = cls.result["archive"]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def test_archive_metadata_does_not_reject_every_member(self):
+        """The experiment must be read per directory, not from the upload row."""
+        result = portal_lib.validate_archive(
+            self.archive,
+            self.archive.name,
+            # Exactly what api.cgi writes into uploads.metadata_json for an
+            # archive: the experiment cannot be one value for the whole file.
+            {"experiment": "(archive)", "model": MODEL, "event": EVENT},
+        )
+        self.assertEqual(
+            result["errors"],
+            [],
+            "a well-formed archive of real NetCDF files must validate cleanly",
+        )
+        self.assertGreater(result["summary"]["checked_netcdf_files"], 0)
+        self.assertEqual(
+            result["summary"]["checked_netcdf_files"],
+            result["summary"]["passed_netcdf_files"],
+        )
+
+    def test_portal_and_shipped_validator_agree(self):
+        """A disagreement here means the two have drifted apart."""
+        import subprocess  # noqa: PLC0415
+
+        portal_result = portal_lib.validate_archive(
+            self.archive,
+            self.archive.name,
+            {"experiment": "(archive)", "model": MODEL, "event": EVENT},
+        )
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "portal" / "downloads" / "rumi_validate.py"),
+                "--json",
+                str(self.archive),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn(proc.returncode, (0, 1), proc.stderr)
+        local = json.loads(proc.stdout)
+        self.assertEqual(
+            bool(portal_result["errors"]),
+            bool(local["errors"]),
+            "portal and rumi_validate.py disagree on whether this archive is "
+            f"acceptable:\nportal={portal_result['errors']}\nlocal={local['errors']}",
+        )
