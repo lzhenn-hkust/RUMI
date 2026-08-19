@@ -1,0 +1,250 @@
+================================================================================
+RUMI PHASE 1 - HOW TO PREPARE AND SUBMIT YOUR SIMULATION OUTPUT
+Rules version: 2026-08-rumi-v3
+Portal:        https://envf.ust.hk/dataview/test/lzn/RUMI/
+Contact:       zli@ust.hk
+================================================================================
+
+You submit ONE ARCHIVE PER EVENT. Each archive covers one event, one model
+configuration, one version. Submit only the events, experiments, and
+initialization runs you actually completed.
+
+
+--------------------------------------------------------------------------------
+1. NAME YOUR ARCHIVE
+--------------------------------------------------------------------------------
+
+    <INSTITUTE>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>.tar.gz
+
+Example:
+
+    HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
+
+  INSTITUTE  your institution short code          e.g. HKUST
+  MODEL      your model                           e.g. MPAS, WRF, UM
+  EVENT      one of the five event codes below
+  POC        surname of your point of contact     e.g. LIU
+  CONFIG     your configuration label             e.g. CONFIG01
+  NN         version, starting at 01
+
+IMPORTANT: tokens must be UPPERCASE letters and digits with NO HYPHENS inside
+them, because the hyphen separates fields. Write "WRF-ARW" as "WRFARW".
+
+Increment the version (r02, r03, ...) when you resubmit a corrected archive for
+the same event and configuration.
+
+.zip and .tgz are also accepted.
+
+
+--------------------------------------------------------------------------------
+2. THE FIVE EVENTS
+--------------------------------------------------------------------------------
+
+  MANGKHUT2018   Typhoon Mangkhut (2018)
+  HRAIN2023      Black Rainstorm (2023)
+  HRAIN2025      Black Rainstorm (2025)
+  HEAT2022       Heatwave (2022)
+  HEAT2024       Heatwave (2024)
+
+
+--------------------------------------------------------------------------------
+3. BUILD THE DIRECTORY TREE
+--------------------------------------------------------------------------------
+
+    HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+        Participant_Model_Documentation.pdf
+        ERA5-AN/
+            Init-0/
+                ERA5-AN-MPAS-HRAIN2025-20250803000000.nc
+                ERA5-AN-MPAS-HRAIN2025-20250803010000.nc
+                ...
+        GFS-FC/
+            Init-5/
+            Init-4/
+            Init-3/
+            Init-2/
+            Init-1/
+            Init-0.5/
+            Init-0.25/
+
+Rules:
+  * The top directory has the same name as the archive, without the extension.
+  * Every .nc file sits exactly three levels down:
+        <top>/<experiment>/<Init-*>/<file>.nc
+  * Include only the directories you actually ran. Do not create empty ones.
+  * A model documentation PDF (or DOCX) at the top level is required.
+
+Experiment directory names - use the canonical RUMI identifiers, the same ones
+that appear in your filenames and in the "experiment" global attribute:
+
+    Analysis driven:  ERA5-AN  FNL-AN  JRA55-AN
+                      UKMO-AN  OTHER-AN
+    Forecast driven:  GFS-FC   UKMO-FC  OTHER-FC
+
+Do NOT use AN-ERA5 / FC-GFS.
+
+
+--------------------------------------------------------------------------------
+4. INITIALIZATION DIRECTORIES
+--------------------------------------------------------------------------------
+
+The Init-* names are LABELS, not offsets. Init-1 does not mean "24 hours before
+the peak" - for events whose peak does not start at 00 UTC the long-lead runs
+use the 00 UTC cycle, so the real offset varies. Use this table:
+
+  Event          Init-5      Init-4      Init-3      Init-2      Init-1      Init-0.5    Init-0.25
+  ------------------------------------------------------------------------------------------------
+  MANGKHUT2018   Sep 11 00Z  Sep 12 00Z  Sep 13 00Z  Sep 14 00Z  Sep 15 00Z  Sep 15 12Z  Sep 15 18Z
+  HRAIN2023      Sep 02 00Z  Sep 03 00Z  Sep 04 00Z  Sep 05 00Z  Sep 06 00Z  Sep 07 02Z  Sep 07 08Z
+  HRAIN2025      Jul 30 00Z  Jul 31 00Z  Aug 01 00Z  Aug 02 00Z  Aug 03 00Z  Aug 04 09Z  Aug 04 15Z
+  HEAT2022       Jul 18 00Z  Jul 19 00Z  Jul 20 00Z  Jul 21 00Z  Jul 22 00Z  Jul 22 12Z  Jul 22 18Z
+  HEAT2024       Aug 23 00Z  Aug 24 00Z  Aug 25 00Z  Aug 26 00Z  Aug 27 00Z  Aug 27 12Z  Aug 27 18Z
+
+  (all times UTC; the year is the one in the event code)
+
+If your forecast cycle does not exist at exactly the tabled hour, use the
+nearest available cycle. Your real initialization time is in the file metadata
+either way, so the validator reads that rather than trusting the label. How
+strict it is depends on which label:
+
+  * Init-5, Init-4, Init-3, Init-2, Init-1 sit on 00 UTC cycles and are
+    unambiguous. Within 6 hours of the tabled time is accepted with a warning;
+    more than 6 hours off is REJECTED. If you are that far away, you are
+    probably in the wrong directory.
+  * Init-0.5 and Init-0.25 do not always land on a standard forecast cycle, so
+    they are PROVISIONAL: any deviation is reported but never rejected, while
+    we confirm what is actually practical.
+
+For ANALYSIS-driven experiments:
+
+  * One initialization  ->  put everything in  Init-0/
+  * Several initializations for the same event  ->  use the absolute UTC time,
+    for example  Init-2025080300/  for 2025-08-03 00Z.
+
+
+--------------------------------------------------------------------------------
+5. WHICH TIME STEPS TO SUBMIT
+--------------------------------------------------------------------------------
+
+Hourly output. Which window depends on your horizontal resolution.
+
+  Event          ~1 km (>= 1000 m)          sub-km (< 1000 m)
+  ----------------------------------------------------------------------
+  MANGKHUT2018   Sep 15 00Z - Sep 17 00Z    Sep 16 00Z - Sep 17 00Z
+  HRAIN2023      Sep 06 00Z - Sep 09 00Z    Sep 07 14Z - Sep 08 20Z
+  HRAIN2025      Aug 03 00Z - Aug 06 00Z    Aug 04 21Z - Aug 06 00Z
+  HEAT2022       Jul 22 00Z - Jul 25 00Z    Jul 23 00Z - Jul 25 00Z
+  HEAT2024       Aug 27 00Z - Aug 29 00Z    Aug 28 00Z - Aug 29 00Z
+
+  * The sub-km window starts at the event's peak impact start and ends 12
+    hours after the peak impact end. Any spin-up your sub-km run needs
+    before that start time is your own modeling choice - it is not part of
+    the required submission window and nobody checks for it.
+  * The FINAL timestamp is mandatory. Its absence is an error.
+  * The FIRST timestamp is not mandatory - accumulated fields such as hourly
+    rainfall are not meaningful at the very first output step. Its absence is
+    only a warning.
+  * If a forecast run starts LATER than the window above, submit from your
+    actual initialization time to the same final timestamp. Example: the
+    HRAIN2025 Init-0.25 run initialized at Aug 04 15Z submits Aug 04 15Z to
+    Aug 06 00Z, i.e. 34 files.
+  * The resolution category is read from your "horizontal_resolution" global
+    attribute, so please write it clearly: "1 km", "500 m", "0.5 km".
+
+
+--------------------------------------------------------------------------------
+6. FILE FORMAT AND REQUIRED VARIABLES
+--------------------------------------------------------------------------------
+
+  NetCDF4, zlib compressed, CF-1.8, missing value -9999.0
+  Core grid: 9.7 arc-second regular lat/lon, 234 lon x 171 lat,
+             first lat 22.12 N, first lon 113.82 E (core domain only)
+  One timestamp per file, UTC
+  Filename: <experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_member][_rNN].nc
+
+  Variables come in three groups. Only the first is a HARD REQUIREMENT - a
+  missing core variable gets your file rejected. The other two are
+  RECOMMENDED: a missing variable is flagged in your submission receipt, but
+  the file is still accepted. See below.
+
+  REQUIRED 2D core (missing = REJECTED):
+      T2M  U10M  V10M  PRATE  SLP  RH2M  TOTAL_PRECIP  PSFC  Q2M
+
+  RECOMMENDED radiation 2D (missing = accepted, but flagged in your receipt):
+      SWDOWN  SWNET  SWDIR  LWDOWN  LWNET
+
+      Please include them if your model produces them - the receipt tells
+      you exactly which ones were not found.
+
+  RECOMMENDED 3D on 850, 500, and 200 hPa (missing = accepted, but flagged in
+  your receipt):
+      T  Z  RH  U  V  Q,  plus ONE OF  OMEGA  or  W
+      (vertical velocity as pressure velocity or geometric velocity - either
+      one counts)
+
+  Use create_ncdf.py (downloadable from the portal) as the reference writer.
+
+
+--------------------------------------------------------------------------------
+7. CHECK YOUR SUBMISSION BEFORE PACKING IT  <-- PLEASE DO THIS
+--------------------------------------------------------------------------------
+
+Download rumi_validate.py from the portal and run it on the UNCOMPRESSED
+directory. It applies exactly the same rules and the same rules version as the
+portal, so if it passes locally it will pass on upload.
+
+    python3 rumi_validate.py HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+
+Once it reports no errors, generate the manifest and pack:
+
+    python3 rumi_validate.py --write-manifest HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+    tar -czf HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz \
+            HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+
+You do NOT write the manifest by hand - the validator generates it from your
+directory structure and NetCDF metadata.
+
+Then run it once more on the finished archive:
+
+    python3 rumi_validate.py HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
+
+This second run is worth the minute it takes. Checking the extracted folder
+cannot see what you eventually name the .tar.gz, and the portal does check that
+name. After a successful directory check the validator prints the exact tar
+command to use - copy it, and the two cannot disagree.
+
+Exit codes: 0 = passed, 1 = errors found, 2 = the tool could not run.
+The script needs Python 3 and either the netCDF4 package or the ncdump command.
+
+
+--------------------------------------------------------------------------------
+8. UPLOAD
+--------------------------------------------------------------------------------
+
+Sign in at the portal, go to Upload, and select your archive. Your institution
+and point of contact come from your account, and the model, event,
+configuration, and version are read from the archive name - you do not retype
+them.
+
+Large uploads:
+
+  * Uploads are chunked and RESUMABLE. If your connection drops or you close the
+    page, come back, select the same file, and click "Resume". Transfer
+    continues from where it stopped.
+  * After the transfer completes, validation of several hundred files takes a
+    few minutes. The page shows progress. You may close the browser; validation
+    continues on the server and the result appears under Submissions.
+  * Naming and directory problems are reported within seconds, before any
+    per-file checking starts.
+
+If a submission is rejected, fix the reported errors, bump the version to r02,
+and upload again.
+
+
+--------------------------------------------------------------------------------
+9. QUESTIONS
+--------------------------------------------------------------------------------
+
+Point of contact for validation questions, corrections, and resubmissions is
+the POC named in your archive. For protocol or portal questions, contact
+zli@ust.hk.

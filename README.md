@@ -46,10 +46,27 @@ Every submitted NetCDF file must contain all nine variables.
 | PSFC | Surface pressure | Pa |
 | Q2M | 2-m specific humidity | kg kg-1 |
 
-### 3D Pressure-Level Variables
+### Radiation 2D Variables (recommended)
 
-The 3D fields are recommended for archiving but are not required by the current
-portal. The authoritative example defines 850, 500, and 200 hPa.
+These five radiation variables are **recommended**, not required: a
+submission missing one or more of them is still accepted, and the upload
+receipt lists exactly which ones were not found.
+
+| Variable | Description | Units |
+|----------|-------------|-------|
+| SWDOWN | Downward shortwave radiation | W m-2 |
+| SWNET | Net shortwave radiation | W m-2 |
+| SWDIR | Direct shortwave radiation | W m-2 |
+| LWDOWN | Downward longwave radiation | W m-2 |
+| LWNET | Net longwave radiation | W m-2 |
+
+### 3D Pressure-Level Variables (recommended)
+
+The 3D fields at the 850, 500, and 200 hPa levels are **recommended**, not
+required: `T`, `Z`, `RH`, `U`, `V`, `Q`, plus at least one of `OMEGA` or `W`
+for vertical motion (pressure velocity or geometric velocity; either counts).
+A submission missing one or more of these is still accepted, and the upload
+receipt lists exactly which ones were not found.
 
 | Variable | Description | Units |
 |----------|-------------|-------|
@@ -58,7 +75,9 @@ portal. The authoritative example defines 850, 500, and 200 hPa.
 | RH | Relative humidity | 0-1 |
 | U | Eastward wind | m s-1 |
 | V | Northward wind | m s-1 |
-| OMEGA | Vertical velocity | Pa s-1 |
+| Q | Specific humidity | kg kg-1 |
+| OMEGA | Vertical velocity (pressure) | Pa s-1 |
+| W | Vertical velocity (geometric) | m s-1 |
 
 Additional 2D and 3D fields are defined in `create_ncdf.py`.
 
@@ -73,20 +92,20 @@ Additional 2D and 3D fields are defined in `create_ncdf.py`.
 ### Filename
 
 ```text
-<RUMI experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_<member>][_vNN].nc
+<experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_<member>][_rNN].nc
 ```
 
 The experiment is the complete forcing and mode tag. `AN` means
 analysis/reanalysis driven, while `FC` means forecast driven.
 
 ```text
-RUMI-ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc
-RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc
+ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc
+GFS-FC-MPAS-HRAIN2025-20250804000000.nc
 ```
 
 For the second example:
 
-- `experiment = RUMI-GFS-FC`
+- `experiment = GFS-FC`
 - `model = MPAS`
 - `event = HRAIN2025`
 
@@ -132,24 +151,52 @@ before accepting a submission.
 
 ## Structured Archives
 
-Participants may upload one `.zip`, `.tar.gz`, or `.tgz` archive for an
-experiment. Every NetCDF file must be stored under a three-digit lead-time
-directory, and the directory must agree with the file's global
-`forecast_lead_time_hours` attribute.
+Phase 1 submissions are uploaded as one archive per event. The authoritative
+specification is [docs/RUMI-submission-spec-v3.md](docs/RUMI-submission-spec-v3.md)
+(`RULES_VERSION: 2026-08-rumi-v3`); the text below is a summary.
 
 ```text
-RUMI-GFS-FC-WRF-HRAIN2025/
-|-- lead_024h/
-|-- lead_048h/
-|-- lead_072h/
-|-- lead_096h/
-`-- lead_120h/
+HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
+`-- HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+    |-- Participant_Model_Documentation.pdf
+    |-- rumi_manifest.json          (written by rumi_validate.py, optional)
+    |-- ERA5-AN/
+    |   `-- Init-0/
+    `-- GFS-FC/
+        |-- Init-5/ ... `-- Init-0.25/
 ```
 
-Each NetCDF member is checked with the same validator used for single-file
-uploads. Archive acceptance is all-or-nothing. Time fields are read from each
-NetCDF file, so they do not need to be entered separately in the archive upload
-form.
+- The archive name is `<INSTITUTE>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>`
+  with `.tar.gz`, `.tgz`, or `.zip`. Fields are uppercase letters and digits and
+  contain no hyphens, so `WRF-ARW` is written `WRFARW`.
+- Every NetCDF file sits at `<archive>/<EXPERIMENT>/<Init-*>/<file>.nc`.
+  Experiment directories use the canonical identifiers (`ERA5-AN`,
+  `GFS-FC`), never the reversed forms.
+- `Init-*` labels index an event-specific table of initialization times; they
+  are labels, not offsets. Analysis-driven runs use `Init-0`, or
+  `Init-<YYYYMMDDHH>` when there are several.
+- The required final timestamp of the submission period must be present. A
+  missing first timestamp or a gap in the hourly series is reported as a
+  warning, not a rejection.
+
+### Check before you upload
+
+`rumi_validate.py`, downloadable from the portal, applies the same rules from
+the same `RULES_VERSION` as the portal itself:
+
+```bash
+python3 rumi_validate.py HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+python3 rumi_validate.py --write-manifest HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+```
+
+It is generated from `portal/backend/rumi_protocol.py` by
+`python3 tools/build_validator.py`, so the two cannot drift apart; the test
+suite fails if the committed copy is stale.
+
+An archive holds several hundred files, so the portal validates it in the
+background: the upload returns immediately with status `queued` and the page
+shows progress. Structural problems are reported within seconds, before any
+per-file work starts.
 
 ## Portal Storage Organization
 
@@ -157,8 +204,12 @@ Accepted uploads are indexed in SQLite and stored privately under the following
 directory structure:
 
 ```text
-submissions/<institution>/<experiment>/<model>/<event>/<upload_id>_<file-name>
+single files: submissions/<institution>/<experiment>/<model>/<event>/<upload_id>_<file-name>
+archives:     submissions/<institution>/<event>/<model>/<upload_id>_<archive-name>
 ```
+
+An event archive spans several experiments, so it cannot be filed under one of
+them; it is filed by event and model instead.
 
 Institution, experiment, model, and event make the files easy to browse and
 batch-process, while the upload ID prevents filename collisions. Institution
