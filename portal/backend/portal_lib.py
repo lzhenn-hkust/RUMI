@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import traceback
 import shutil
 import sqlite3
 import subprocess
@@ -12,6 +13,56 @@ import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
+
+from rumi_protocol import (  # noqa: F401  (re-exported for api.cgi, manage.py and tests)
+    ARCHIVE_NAME_PATTERN,
+    ARCHIVE_NAME_RE,
+    ARCHIVE_TIME_ATTRS,
+    CORE_2D_VARS,
+    CORE_GRID,
+    EVENTS,
+    EXPERIMENTS,
+    INIT_DIR_RE,
+    INIT_LABELS,
+    INIT_TIMES,
+    OUTPUT_INTERVAL_HOURS,
+    PHYSICS_ATTRS,
+    RECOMMENDED_2D_VARS,
+    REQUIRED_GLOBAL_ATTRS,
+    REQUIRED_PERIODS,
+    RULES_VERSION,
+    RUMI_FILENAME_RE,
+    RECOMMENDED_3D_ALTERNATIVES,
+    RECOMMENDED_3D_LEVELS_HPA,
+    RECOMMENDED_3D_LEVEL_VARS,
+    RECOMMENDED_RADIATION_VARS,
+    DOCUMENTATION_EXTENSIONS,
+    INIT_TOLERANCE_HOURS,
+    IssueLog,
+    archive_stem,
+    expected_initialization,
+    init_label_is_valid,
+    parse_rumi_filename,
+    header_attr,
+    header_dim,
+    header_has_var,
+    netcdf_facts_from_header,
+    parse_lead_time_hours,
+    validate_netcdf_facts,
+    validate_timestamp_in_event,
+    validate_archive_structure,
+    validate_init_directory,
+    SAFE_FILENAME_RE,
+    THREE_D_VARS,
+    expected_timestamps,
+    init_time_for,
+    iso_z,
+    parse_absolute_init_label,
+    parse_archive_name,
+    parse_utc,
+    required_period,
+    resolution_category,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -40,10 +91,10 @@ SESSION_COOKIE = "rumi_session"
 SESSION_DAYS = 7
 PBKDF2_ITERATIONS = 240000
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024 * 1024
-USER_STORAGE_QUOTA_BYTES = 100 * 1024 * 1024 * 1024
+USER_STORAGE_QUOTA_BYTES = 250 * 1024 * 1024 * 1024
 MAX_CHUNK_BYTES = 8 * 1024 * 1024
-MAX_ARCHIVE_MEMBERS = 2000
-MAX_ARCHIVE_NETCDF_FILES = 500
+MAX_ARCHIVE_MEMBERS = 3000
+MAX_ARCHIVE_NETCDF_FILES = 1500
 MAX_ARCHIVE_EXPANDED_BYTES = MAX_UPLOAD_BYTES
 REGISTRATION_CODE_KEY = "registration_code"
 
@@ -61,158 +112,12 @@ ACCEPTED_UPLOAD_STATUSES = (
     "received_manual_review",
 )
 
-EVENTS = {
-    "MANGKHUT2018": {
-        "name": "Typhoon Mangkhut (2018)",
-        "start": "2018-09-15T00:00:00Z",
-        "end": "2018-09-17T00:00:00Z",
-        "category": "Tropical cyclone",
-    },
-    "HRAIN2023": {
-        "name": "Black Rainstorm (2023)",
-        "start": "2023-09-06T00:00:00Z",
-        "end": "2023-09-09T00:00:00Z",
-        "category": "Heavy rain",
-    },
-    "HRAIN2025": {
-        "name": "Black Rainstorm (2025)",
-        "start": "2025-08-03T00:00:00Z",
-        "end": "2025-08-06T00:00:00Z",
-        "category": "Heavy rain",
-    },
-    "HEAT2022": {
-        "name": "Heatwave (2022)",
-        "start": "2022-07-22T00:00:00Z",
-        "end": "2022-07-25T00:00:00Z",
-        "category": "Extreme heat",
-    },
-    "HEAT2024": {
-        "name": "Heatwave (2024)",
-        "start": "2024-08-27T00:00:00Z",
-        "end": "2024-08-29T00:00:00Z",
-        "category": "Extreme heat",
-    },
-}
-
-EXPERIMENTS = [
-    "RUMI-ERA5-AN",
-    "RUMI-FNL-AN",
-    "RUMI-GFS-FC",
-    "RUMI-OTHER-AN",
-    "RUMI-OTHER-FC",
-]
-
-CORE_GRID = {
-    "lat_south": 22.12,
-    "lon_west": 113.82,
-    "resolution_degrees": 9.7 / 3600.0,
-    "nlat": 171,
-    "nlon": 234,
-}
-
-CORE_2D_VARS = [
-    "T2M",
-    "U10M",
-    "V10M",
-    "PRATE",
-    "SLP",
-    "RH2M",
-    "TOTAL_PRECIP",
-    "PSFC",
-    "Q2M",
-]
-
-RECOMMENDED_2D_VARS = [
-    "TSK",
-    "TD2M",
-    "LH",
-    "HFX",
-    "SWDOWN",
-    "SWUP",
-    "LWDOWN",
-    "LWUP",
-    "GRDFLX",
-    "WSPD10M",
-    "WDIR10M",
-    "CLDFRAC",
-    "CTH",
-    "CBH",
-    "CWP",
-    "IWP",
-    "RWP",
-    "PW",
-    "HOURLY_PRECIP",
-    "PRATE_CONV",
-    "PRATE_GRID",
-    "REFL_COMP",
-    "REFL_2KM",
-    "CAPE",
-    "CIN",
-    "PBLH",
-    "W850",
-    "W500",
-    "HELICITY",
-    "UH_MAX",
-]
-
-THREE_D_VARS = ["T", "Z", "RH", "U", "V", "OMEGA"]
-
-REQUIRED_GLOBAL_ATTRS = [
-    "Conventions",
-    "title",
-    "institution",
-    "source",
-    "history",
-    "experiment",
-    "event",
-    "event_name",
-    "simulation_start_time",
-    "initialization_time",
-    "forecast_initialization_time",
-    "forecast_lead_time_hours",
-    "forcing_mode",
-    "forcing_source",
-    "forcing_data",
-    "forcing_data_version",
-    "forcing_resolution",
-    "forcing_update_interval",
-    "horizontal_resolution",
-    "contact",
-    "creator_name",
-    "creation_date",
-    "version",
-]
-
-ARCHIVE_TIME_ATTRS = (
-    "simulation_start_time",
-    "initialization_time",
-    "forecast_initialization_time",
-    "forecast_lead_time_hours",
+IN_FLIGHT_UPLOAD_STATUSES = (
+    "receiving",
+    "queued",
+    "validating",
 )
 
-PHYSICS_ATTRS = [
-    "microphysics_scheme",
-    "cumulus_scheme",
-    "pbl_scheme",
-    "radiation_scheme",
-    "land_surface_scheme",
-    "urban_scheme",
-    "surface_layer_scheme",
-    "turbulence_closure",
-    "landuse_dataset",
-    "urban_morphology_source",
-    "terrain_dataset",
-    "soil_dataset",
-]
-
-SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,240}$")
-RUMI_FILENAME_RE = re.compile(
-    r"^RUMI-([A-Za-z0-9._]+(?:-[A-Za-z0-9._]+)*)-(AN|FC)-"
-    r"([A-Za-z0-9._]+)-("
-    + "|".join(EVENTS.keys())
-    + r")-(\d{14})(?:_([A-Za-z0-9._-]+))?(?:_v([0-9]{2,}))?\.nc$"
-)
-LEAD_DIRECTORY_RE = re.compile(r"^lead_(\d{3})h$", re.IGNORECASE)
 
 
 class PortalError(Exception):
@@ -225,15 +130,6 @@ class PortalError(Exception):
 
 def utcnow():
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def parse_utc(value):
-    if not value:
-        return None
-    try:
-        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 def slugify(value):
@@ -366,6 +262,15 @@ def init_schema(con):
         )
     if "replaces_upload_id" not in upload_columns:
         con.execute("ALTER TABLE uploads ADD COLUMN replaces_upload_id TEXT")
+    for column, definition in UPLOAD_COLUMN_ADDITIONS:
+        if column not in upload_columns:
+            con.execute(f"ALTER TABLE uploads ADD COLUMN {column} {definition}")
+    user_columns = {
+        row["name"] for row in con.execute("PRAGMA table_info(users)").fetchall()
+    }
+    for column, definition in USER_COLUMN_ADDITIONS:
+        if column not in user_columns:
+            con.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
     con.execute("CREATE INDEX IF NOT EXISTS idx_uploads_institution ON uploads(institution)")
     con.execute(
         """
@@ -374,6 +279,31 @@ def init_schema(con):
         """
     )
     con.commit()
+
+
+USER_COLUMN_ADDITIONS = (
+    # The point of contact and participant list belong to the account, so the
+    # upload form does not have to ask for them on every submission.
+    ("poc_surname", "TEXT"),
+    ("participants", "TEXT"),
+)
+
+UPLOAD_COLUMN_ADDITIONS = (
+    # Background validation progress, so the browser can show "213/512" while a
+    # per-event archive is being checked.
+    ("validation_done", "INTEGER NOT NULL DEFAULT 0"),
+    ("validation_total", "INTEGER NOT NULL DEFAULT 0"),
+    ("worker_pid", "INTEGER"),
+    ("worker_heartbeat", "TEXT"),
+    # Which rule set accepted the submission, so a later protocol change is
+    # traceable per upload rather than only per deployment.
+    ("rules_version", "TEXT"),
+    # Configuration identity parsed from the v3 archive name.
+    ("poc", "TEXT"),
+    ("config_id", "TEXT"),
+    ("archive_version", "TEXT"),
+    ("participants", "TEXT"),
+)
 
 
 def hash_password(password, salt_hex=None):
@@ -528,6 +458,8 @@ def make_user_public(row):
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "last_login": row["last_login"],
+        "poc_surname": row.get("poc_surname") or "",
+        "participants": row.get("participants") or "",
     }
 
 
@@ -584,25 +516,6 @@ def file_kind(name):
     raise PortalError(400, "Upload a .nc, .zip, .tar.gz, or .tgz file.")
 
 
-def parse_rumi_filename(name):
-    match = RUMI_FILENAME_RE.match(name)
-    if not match:
-        return None
-    forcing, mode, model, event, stamp, member, version = match.groups()
-    try:
-        ts = dt.datetime.strptime(stamp, "%Y%m%d%H%M%S").replace(tzinfo=dt.timezone.utc)
-    except ValueError:
-        return None
-    return {
-        "experiment": f"RUMI-{forcing}-{mode}",
-        "model": model,
-        "event": event,
-        "timestamp": ts.isoformat().replace("+00:00", "Z"),
-        "member": member or "",
-        "version": version or "",
-    }
-
-
 def sha256_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -625,17 +538,59 @@ def run_command(args, timeout=60):
     )
 
 
-def ncdump_executable():
-    candidates = [
+REFERENCE_NETCDF = BASE_DIR / "downloads" / "RUMI_template_2d.nc"
+
+_ncdump_cache = None
+
+
+def ncdump_candidates():
+    return [
         os.environ.get("RUMI_NCDUMP"),
         "/usr/bin/ncdump",
         "/usr/local/bin/ncdump",
         shutil.which("ncdump"),
         "/home/lzhenn/array74/soft/anaconda3/bin/ncdump",
     ]
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+
+
+def ncdump_works(candidate):
+    """Confirm a candidate can actually read a known-good NetCDF4 file.
+
+    Some builds on the deployment host resolve but fail at load time with a
+    missing glibc symbol. Without this check such a build would report every
+    participant submission as unreadable, turning a server problem into a
+    stream of misleading rejections.
+    """
+    if not REFERENCE_NETCDF.is_file():
+        return True
+    try:
+        proc = run_command([candidate, "-k", str(REFERENCE_NETCDF)], timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and "netCDF-4" in proc.stdout
+
+
+def ncdump_executable():
+    global _ncdump_cache
+    if _ncdump_cache:
+        return _ncdump_cache
+    resolved = []
+    for candidate in ncdump_candidates():
+        if not candidate or candidate in resolved:
+            continue
+        if not (Path(candidate).is_file() and os.access(candidate, os.X_OK)):
+            continue
+        resolved.append(candidate)
+        if ncdump_works(candidate):
+            _ncdump_cache = candidate
             return candidate
+    if resolved:
+        raise PortalError(
+            500,
+            "NetCDF validation tool is installed but not working. "
+            "No submission was checked.",
+            {"rejected_candidates": resolved},
+        )
     raise PortalError(500, "NetCDF validation tool is unavailable.")
 
 
@@ -690,207 +645,53 @@ def netcdf_coordinates(path):
     return {"lat": values("lat"), "lon": values("lon")}
 
 
-def header_has_var(header, name):
-    return re.search(r"\b(?:byte|char|short|int|int64|float|double)\s+" + re.escape(name) + r"\s*\(", header) is not None
-
-
-def header_dim(header, name):
-    match = re.search(r"\b" + re.escape(name) + r"\s*=\s*(\d+)\s*;", header)
-    return int(match.group(1)) if match else None
-
-
-def header_attr(header, name):
-    match = re.search(
-        r":\s*" + re.escape(name) + r"\s*=\s*(?:\"([^\"]*)\"|([^;\r\n]+))\s*;",
-        header,
-    )
-    if not match:
-        return None
-    return match.group(1) if match.group(1) is not None else match.group(2).strip()
-
-
-def parse_lead_time_hours(value):
-    if value is None:
-        return None
-    match = re.match(r"^\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))", str(value))
-    if not match:
-        return None
-    suffix = str(value)[match.end():].strip().lower()
-    if suffix not in {
-        "",
-        "h",
-        "hr",
-        "hrs",
-        "hour",
-        "hours",
-        "b",
-        "s",
-        "us",
-        "l",
-        "ll",
-        "ul",
-        "ull",
-        "f",
-        "d",
-    }:
-        return None
-    hours = float(match.group(1))
-    if hours < 0 or not hours.is_integer():
-        return None
-    return int(hours)
-
-
-def archive_member_lead_hours(name):
-    matches = [
-        int(match.group(1))
-        for part in Path(name).parts
-        if (match := LEAD_DIRECTORY_RE.fullmatch(part))
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def validate_timestamp_in_event(timestamp_iso, event):
-    ts = parse_utc(timestamp_iso)
-    if not ts or event not in EVENTS:
-        return None
-    start = parse_utc(EVENTS[event]["start"])
-    end = parse_utc(EVENTS[event]["end"])
-    return start <= ts <= end
-
-
 def validate_netcdf(path, filename, metadata):
-    errors = []
-    warnings = []
-    summary = {}
+    """Read one NetCDF file with ncdump and judge it against the shared rules.
 
-    parsed = parse_rumi_filename(filename)
-    if not parsed:
-        errors.append(
-            "File name must follow <RUMI experiment>-<Model>-<Event>-"
-            "<YYYYMMDDHHMMSS>[_member][_vNN].nc, for example "
-            "RUMI-ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc."
-        )
-    else:
-        summary["filename"] = parsed
-        if metadata.get("experiment") and parsed["experiment"].upper() != metadata.get("experiment", "").upper():
-            errors.append("File name experiment does not match the submitted metadata.")
-        if metadata.get("model") and parsed["model"].lower() != metadata.get("model", "").lower():
-            errors.append("File name model does not match the submitted metadata.")
-        if metadata.get("event") and parsed["event"] != metadata.get("event"):
-            errors.append("File name event does not match the submitted metadata.")
-        if validate_timestamp_in_event(parsed["timestamp"], parsed["event"]) is False:
-            warnings.append("File timestamp is outside the baseline simulation period for the selected event.")
-
+    Only the reading happens here. The verdict comes from
+    ``rumi_protocol.validate_netcdf_facts``, which is the same code the
+    downloadable validator runs on the participant's own machine.
+    """
     try:
         kind = netcdf_kind(path)
-        summary["netcdf_kind"] = kind
-        if "netCDF-4" not in kind:
-            errors.append("File is readable by ncdump but is not NetCDF4.")
         header = netcdf_header(path)
         coordinates = netcdf_coordinates(path)
     except PortalError as exc:
         if exc.status >= 500:
             raise
-        errors.append(exc.message)
+        result = validate_netcdf_facts(filename, None, metadata)
+        result["errors"].append(exc.message)
         if exc.details.get("stderr"):
-            warnings.append(exc.details["stderr"][:600])
-        return {"errors": errors, "warnings": warnings, "summary": summary}
+            result["warnings"].append(exc.details["stderr"][:600])
+        return result
 
-    missing_core = [name for name in CORE_2D_VARS if not header_has_var(header, name)]
-    if missing_core:
-        errors.append("Missing core 2D variables: " + ", ".join(missing_core))
-
-    present_recommended = [name for name in RECOMMENDED_2D_VARS if header_has_var(header, name)]
-    present_3d = [name for name in THREE_D_VARS if header_has_var(header, name)]
-    summary["recommended_2d_count"] = len(present_recommended)
-    summary["three_d_present"] = present_3d
-    summary["time_metadata"] = {
-        name: header_attr(header, name) for name in ARCHIVE_TIME_ATTRS
-    }
-
-    lat = header_dim(header, "lat")
-    lon = header_dim(header, "lon")
-    summary["dimensions"] = {
-        "lat": lat,
-        "lon": lon,
-    }
-    if lat != CORE_GRID["nlat"] or lon != CORE_GRID["nlon"]:
-        errors.append(
-            "Standard core grid dimensions must be 171 lat by 234 lon "
-            "(9.7 arc-seconds)."
-        )
-
-    expected_coordinates = {
-        "lat": (CORE_GRID["lat_south"], CORE_GRID["nlat"]),
-        "lon": (CORE_GRID["lon_west"], CORE_GRID["nlon"]),
-    }
-    for name, (start, count) in expected_coordinates.items():
-        values = coordinates[name]
-        valid = len(values) == count and all(
-            abs(value - (start + index * CORE_GRID["resolution_degrees"])) <= 1e-7
-            for index, value in enumerate(values)
-        )
-        if not valid:
-            if len(values) > 1:
-                mean_spacing_arcsec = (
-                    (values[-1] - values[0]) / (len(values) - 1) * 3600
-                )
-                received = (
-                    f" Received {len(values)} points from {values[0]:.8f} to "
-                    f"{values[-1]:.8f}, with mean spacing "
-                    f"{mean_spacing_arcsec:.6f} arc-seconds."
-                )
-            else:
-                received = f" Received {len(values)} coordinate values."
-            errors.append(
-                f"{name} coordinates must follow the RUMI 9.7 arc-second "
-                f"core grid ({count} points starting at {start}).{received}"
-            )
-
-    missing_attrs = [name for name in REQUIRED_GLOBAL_ATTRS if header_attr(header, name) is None]
-    if missing_attrs:
-        warnings.append("Missing required global attributes: " + ", ".join(missing_attrs))
-
-    missing_physics = [name for name in PHYSICS_ATTRS if header_attr(header, name) is None]
-    if missing_physics:
-        warnings.append("Missing physics/surface documentation attributes: " + ", ".join(missing_physics))
-
-    conventions = header_attr(header, "Conventions")
-    if conventions and "CF-1.8" not in conventions:
-        warnings.append("Conventions attribute does not include CF-1.8.")
-
-    attr_event = header_attr(header, "event")
-    if parsed and attr_event and attr_event != parsed["event"]:
-        errors.append("Global attribute event does not match file name.")
-
-    attr_experiment = header_attr(header, "experiment")
-    if parsed and attr_experiment:
-        if attr_experiment.upper() != parsed["experiment"].upper():
-            errors.append("Global attribute experiment does not match file name.")
-
-    attr_model = header_attr(header, "model") or header_attr(header, "source")
-    if parsed and attr_model and attr_model.lower() != parsed["model"].lower():
-        warnings.append(
-            "Global attribute model/source does not match the model in the file name."
-        )
-
-    return {"errors": errors, "warnings": warnings, "summary": summary}
+    facts = netcdf_facts_from_header(kind, header, coordinates)
+    return validate_netcdf_facts(filename, facts, metadata)
 
 
-def validate_archive(path, filename, metadata):
-    errors = []
-    warnings = []
+def validate_archive(path, filename, metadata, progress=None):
+    """Validate a structured RUMI v3 submission archive.
+
+    Structure is checked first from member paths alone, so naming and layout
+    mistakes are reported in milliseconds. Per-file NetCDF checks only run once
+    the layout is sound, because they cost roughly 0.2 s per file and a
+    per-event archive holds several hundred of them.
+
+    ``progress`` is an optional ``callable(done, total)`` used by the background
+    validation worker to publish progress while it works.
+    """
+    errors = IssueLog()
+    warnings = IssueLog()
     summary = {
+        "rules_version": RULES_VERSION,
         "archive_members": 0,
         "netcdf_files": 0,
         "validated_netcdf_files": 0,
         "checked_netcdf_files": 0,
         "passed_netcdf_files": 0,
         "documentation_files": 0,
-        "lead_time_folders": {},
+        "experiments": {},
     }
-    lower = filename.lower()
-    docs_ext = (".pdf", ".docx", ".txt", ".md")
 
     def entry_name(entry):
         return entry.filename if hasattr(entry, "filename") else entry.name
@@ -898,9 +699,80 @@ def validate_archive(path, filename, metadata):
     def entry_size(entry):
         return entry.file_size if hasattr(entry, "file_size") else entry.size
 
-    def validate_members(entries, open_member):
-        for entry in entries:
+    def read_member(open_member, entry):
+        with open_member(entry) as source:
+            return source.read()
+
+    def check_members(entries, open_member, archive_kind):
+        names = [entry_name(entry) for entry in entries]
+        netcdf_entries = [
+            entry for entry in entries if entry_name(entry).lower().endswith(".nc")
+        ]
+        summary["archive_kind"] = archive_kind
+        summary["archive_members"] = len(entries)
+        summary["netcdf_files"] = len(netcdf_entries)
+
+        if len(entries) > MAX_ARCHIVE_MEMBERS:
+            errors.add(f"Archive contains more than {MAX_ARCHIVE_MEMBERS} files.")
+        if len(netcdf_entries) > MAX_ARCHIVE_NETCDF_FILES:
+            errors.add(
+                f"Archive contains more than {MAX_ARCHIVE_NETCDF_FILES} NetCDF files."
+            )
+        if sum(entry_size(entry) for entry in entries) > MAX_ARCHIVE_EXPANDED_BYTES:
+            errors.add("Archive expands beyond the permitted size.")
+        if errors:
+            return
+
+        structure = validate_archive_structure(names, filename)
+        summary["archive"] = structure["summary"].get("archive")
+        summary["documentation_files"] = structure["summary"]["documentation_files"]
+        for message in structure["errors"]:
+            errors.add(message)
+        for message in structure["warnings"]:
+            warnings.add(message)
+
+        manifest_entry = next(
+            (
+                entry
+                for entry in entries
+                if Path(entry_name(entry)).name == "rumi_manifest.json"
+            ),
+            None,
+        )
+        if manifest_entry is not None:
+            try:
+                manifest = json.loads(read_member(open_member, manifest_entry))
+            except (OSError, ValueError) as exc:
+                warnings.add(f"rumi_manifest.json could not be read: {exc}")
+            else:
+                summary["manifest"] = {
+                    "rules_version": manifest.get("rules_version"),
+                    "participants": manifest.get("participants"),
+                    "validator_version": manifest.get("validator_version"),
+                }
+                if manifest.get("rules_version") != RULES_VERSION:
+                    warnings.add(
+                        f"rumi_manifest.json was written for rules version "
+                        f"{manifest.get('rules_version')}, but this portal uses "
+                        f"{RULES_VERSION}. Please download rumi_validate.py again."
+                    )
+
+        if errors:
+            warnings.add(
+                "Per-file checks were skipped because the archive layout must be "
+                "corrected first."
+            )
+            return
+
+        layout = structure["layout"]
+        members_by_directory = {}
+        total = len(layout)
+        done = 0
+        for entry in netcdf_entries:
             member_name = entry_name(entry)
+            placement = layout.get(member_name)
+            if placement is None:
+                continue
             temporary_path = None
             try:
                 with open_member(entry) as source:
@@ -913,96 +785,55 @@ def validate_archive(path, filename, metadata):
                         shutil.copyfileobj(source, temporary, length=1024 * 1024)
                         temporary_path = Path(temporary.name)
                 result = validate_netcdf(
-                    temporary_path,
-                    Path(member_name).name,
-                    metadata,
+                    temporary_path, placement["file_name"], metadata
                 )
             except (OSError, RuntimeError, ValueError) as exc:
-                errors.append(f"{member_name}: could not be read: {exc}")
+                errors.add(f"NetCDF file could not be read: {exc}", member_name)
                 continue
             finally:
                 if temporary_path:
                     temporary_path.unlink(missing_ok=True)
 
-            member_errors = list(result["errors"])
-            time_metadata = result["summary"].get("time_metadata")
-            if time_metadata is not None:
-                missing_time_attrs = [
-                    name for name in ARCHIVE_TIME_ATTRS if not time_metadata.get(name)
-                ]
-                if missing_time_attrs:
-                    member_errors.append(
-                        "Structured archive member is missing time attributes: "
-                        + ", ".join(missing_time_attrs)
-                    )
-
-            folder_lead = archive_member_lead_hours(member_name)
-            if folder_lead is None:
-                member_errors.append(
-                    "NetCDF file must be stored under exactly one lead_NNNh directory."
-                )
-            else:
-                folder_name = f"lead_{folder_lead:03d}h"
-                lead_counts = summary["lead_time_folders"]
-                lead_counts[folder_name] = lead_counts.get(folder_name, 0) + 1
-                attr_lead = parse_lead_time_hours(
-                    (time_metadata or {}).get("forecast_lead_time_hours")
-                )
-                if attr_lead is None:
-                    member_errors.append(
-                        "Global attribute forecast_lead_time_hours must be a "
-                        "non-negative whole number."
-                    )
-                elif attr_lead != folder_lead:
-                    member_errors.append(
-                        f"Directory {folder_name} does not match global attribute "
-                        f"forecast_lead_time_hours={attr_lead}."
-                    )
-
             summary["validated_netcdf_files"] += 1
             summary["checked_netcdf_files"] += 1
-            if not member_errors:
+            if not result["errors"]:
                 summary["passed_netcdf_files"] += 1
-            errors.extend(f"{member_name}: {message}" for message in member_errors)
-            warnings.extend(
-                f"{member_name}: {message}" for message in result["warnings"]
+            for message in result["errors"]:
+                errors.add(message, member_name)
+            for message in result["warnings"]:
+                warnings.add(message, member_name)
+
+            key = (placement["experiment"], placement["init"])
+            members_by_directory.setdefault(key, []).append(
+                {
+                    "name": member_name,
+                    "timestamp": placement["timestamp"],
+                    "time_metadata": result["summary"].get("time_metadata") or {},
+                }
+            )
+            done += 1
+            if progress:
+                progress(done, total)
+
+        event = (summary.get("archive") or {}).get("event")
+        for (experiment, init_label), members in sorted(members_by_directory.items()):
+            directory = validate_init_directory(
+                event, experiment, init_label, members
+            )
+            for message in directory["errors"]:
+                errors.add(message)
+            for message in directory["warnings"]:
+                warnings.add(message)
+            summary["experiments"].setdefault(experiment, {})[init_label] = (
+                directory["coverage"]
             )
 
-    def inspect_archive(entries, open_member, archive_kind):
-        names = [entry_name(entry) for entry in entries]
-        netcdf_entries = [
-            entry for entry in entries if entry_name(entry).lower().endswith(".nc")
-        ]
-        summary["archive_kind"] = archive_kind
-        summary["archive_members"] = len(entries)
-        summary["netcdf_files"] = len(netcdf_entries)
-        summary["documentation_files"] = len(
-            [name for name in names if name.lower().endswith(docs_ext)]
-        )
-
-        unsafe = [
-            name
-            for name in names
-            if name.startswith("/") or ".." in Path(name).parts
-        ]
-        if unsafe:
-            errors.append("Archive contains unsafe paths.")
-        if len(entries) > MAX_ARCHIVE_MEMBERS:
-            errors.append(f"Archive contains more than {MAX_ARCHIVE_MEMBERS} files.")
-        if len(netcdf_entries) > MAX_ARCHIVE_NETCDF_FILES:
-            errors.append(
-                f"Archive contains more than {MAX_ARCHIVE_NETCDF_FILES} NetCDF files."
-            )
-        if sum(entry_size(entry) for entry in entries) > MAX_ARCHIVE_EXPANDED_BYTES:
-            errors.append("Archive expands beyond the permitted size.")
-        if not errors:
-            validate_members(netcdf_entries, open_member)
-
+    lower = filename.lower()
     try:
         if lower.endswith(".zip"):
             with zipfile.ZipFile(path) as archive:
                 entries = [info for info in archive.infolist() if not info.is_dir()]
-                inspect_archive(entries, archive.open, "zip")
+                check_members(entries, archive.open, "zip")
         else:
             with tarfile.open(path, "r:*") as archive:
                 entries = [member for member in archive.getmembers() if member.isfile()]
@@ -1013,20 +844,19 @@ def validate_archive(path, filename, metadata):
                         raise OSError("Archive member is unavailable.")
                     return source
 
-                inspect_archive(entries, archive_opener, "tar")
+                check_members(entries, archive_opener, "tar")
     except (zipfile.BadZipFile, tarfile.TarError, OSError) as exc:
         return {
             "errors": [f"Archive could not be read: {exc}"],
-            "warnings": warnings,
+            "warnings": warnings.messages(),
             "summary": summary,
         }
 
-    if not summary["netcdf_files"]:
-        errors.append("Archive does not contain any .nc files.")
-    if not summary["documentation_files"]:
-        warnings.append("Archive does not include a recognizable technical document.")
-
-    return {"errors": errors, "warnings": warnings, "summary": summary}
+    return {
+        "errors": errors.messages(),
+        "warnings": warnings.messages(),
+        "summary": summary,
+    }
 
 
 def validate_submission(path, filename, metadata):
@@ -1034,6 +864,224 @@ def validate_submission(path, filename, metadata):
     if kind == "netcdf":
         return validate_netcdf(path, filename, metadata)
     return validate_archive(path, filename, metadata)
+
+
+def remove_upload_files(row):
+    """Delete an upload's stored and temporary files, then prune empty parents."""
+    for key in ("stored_path", "temp_path"):
+        value = row[key]
+        if not value:
+            continue
+        path = Path(value)
+        try:
+            path.relative_to(DATA_DIR)
+        except ValueError:
+            continue
+        if path.exists() and path.is_file():
+            path.unlink()
+        for parent in path.parents:
+            if parent == DATA_DIR or parent == SUBMISSIONS_DIR or parent == INCOMING_DIR:
+                break
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+
+
+def log_exception(exc, context=""):
+    """Record a traceback and return a short reference to quote to the user."""
+    request_id = secrets.token_hex(6)
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOG_DIR / "api_errors.log", "a", encoding="utf-8") as handle:
+            handle.write(
+                f"\n[{utcnow()}] request_id={request_id} context={context} "
+                f"type={type(exc).__name__}\n"
+            )
+            handle.write(traceback.format_exc())
+    except Exception:
+        pass
+    return request_id
+
+
+def storage_directory(row):
+    """Where an accepted submission is filed.
+
+    A v3 archive spans several experiments, so it is filed by event and model.
+    Single NetCDF files keep the original four-level path so existing
+    submissions stay where the database says they are.
+    """
+    institution = slugify(row["institution"])
+    if row["file_kind"] in ("zip", "tar"):
+        return SUBMISSIONS_DIR / institution / row["event"] / slugify(row["model"])
+    return (
+        SUBMISSIONS_DIR
+        / institution
+        / slugify(row["experiment"])
+        / slugify(row["model"])
+        / row["event"]
+    )
+
+
+def finalize_upload(con, row, validation, digest):
+    """Record the outcome of a validated upload and, if accepted, store it.
+
+    Shared by the CGI (single NetCDF files, validated inline) and by the
+    background worker (archives), so an archive and a single file cannot drift
+    apart on duplicate handling, storage layout, or supersession.
+    Returns the refreshed upload row.
+    """
+    upload_id = row["upload_id"]
+    now = utcnow()
+
+    def refresh():
+        return con.execute(
+            "SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)
+        ).fetchone()
+
+    if validation.get("errors"):
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'rejected', sha256 = ?, validation_json = ?,
+                rules_version = ?, updated_at = ?, worker_pid = NULL
+            WHERE upload_id = ?
+            """,
+            (digest, json.dumps(validation, ensure_ascii=True), RULES_VERSION, now, upload_id),
+        )
+        con.commit()
+        return refresh()
+
+    accepted_placeholders = ", ".join("?" for _ in ACCEPTED_UPLOAD_STATUSES)
+    duplicate = con.execute(
+        f"""
+        SELECT * FROM uploads
+        WHERE user_id = ? AND sha256 = ? AND id != ?
+          AND upload_id != COALESCE(?, '')
+          AND status IN ({accepted_placeholders})
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (
+            row["user_id"],
+            digest,
+            row["id"],
+            row["replaces_upload_id"],
+            *ACCEPTED_UPLOAD_STATUSES,
+        ),
+    ).fetchone()
+    if duplicate:
+        validation["errors"] = [
+            f"Identical file content was already accepted as {duplicate['file_name']}."
+        ]
+        validation.setdefault("summary", {})["duplicate_upload_id"] = duplicate["upload_id"]
+        remove_upload_files(row)
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'duplicate', temp_path = NULL, sha256 = ?,
+                validation_json = ?, rules_version = ?, updated_at = ?,
+                worker_pid = NULL
+            WHERE upload_id = ?
+            """,
+            (digest, json.dumps(validation, ensure_ascii=True), RULES_VERSION, now, upload_id),
+        )
+        con.commit()
+        return refresh()
+
+    temp_path = Path(row["temp_path"])
+    final_dir = storage_directory(row)
+    final_path = final_dir / (upload_id + "_" + safe_file_name(row["file_name"]))
+    inactive_placeholders = ", ".join("?" for _ in INACTIVE_UPLOAD_STATUSES)
+    try:
+        final_dir.mkdir(parents=True, exist_ok=True)
+        temp_path.replace(final_path)
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'validated', stored_path = ?, temp_path = NULL, sha256 = ?,
+                validation_json = ?, rules_version = ?, updated_at = ?,
+                worker_pid = NULL
+            WHERE upload_id = ?
+            """,
+            (
+                str(final_path),
+                digest,
+                json.dumps(validation, ensure_ascii=True),
+                RULES_VERSION,
+                now,
+                upload_id,
+            ),
+        )
+        if row["replaces_upload_id"]:
+            con.execute(
+                f"""
+                UPDATE uploads
+                SET status = 'superseded', updated_at = ?
+                WHERE upload_id = ? AND user_id = ?
+                  AND status NOT IN ({inactive_placeholders})
+                """,
+                (now, row["replaces_upload_id"], row["user_id"], *INACTIVE_UPLOAD_STATUSES),
+            )
+        con.commit()
+    except Exception as exc:
+        request_id = log_exception(exc, context=f"finalize:{upload_id}")
+        validation["errors"] = [
+            "The file passed validation, but the server could not finalize it. "
+            f"No submission was accepted. Reference: {request_id}"
+        ]
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'server_error', sha256 = ?, validation_json = ?,
+                updated_at = ?, worker_pid = NULL
+            WHERE upload_id = ?
+            """,
+            (digest, json.dumps(validation, ensure_ascii=True), now, upload_id),
+        )
+        con.commit()
+    return refresh()
+
+
+def reap_stale_validations(con, older_than_minutes=30):
+    """Fail validations whose worker stopped reporting.
+
+    Called opportunistically from ordinary requests. The worker runs on the web
+    host while the only crontab lives on a different machine, so a scheduled
+    reaper would mean a second host writing this SQLite file over NFS.
+    """
+    cutoff = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=older_than_minutes)
+    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    rows = con.execute(
+        """
+        SELECT * FROM uploads
+        WHERE status IN ('queued', 'validating')
+          AND COALESCE(worker_heartbeat, updated_at) < ?
+        """,
+        (cutoff,),
+    ).fetchall()
+    for row in rows:
+        validation = {
+            "errors": [
+                "Validation stopped unexpectedly and no submission was accepted. "
+                "Please upload the archive again."
+            ],
+            "warnings": [],
+            "summary": {},
+        }
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'server_error', validation_json = ?, updated_at = ?,
+                worker_pid = NULL
+            WHERE upload_id = ?
+            """,
+            (json.dumps(validation, ensure_ascii=True), utcnow(), row["upload_id"]),
+        )
+    if rows:
+        con.commit()
+    return len(rows)
 
 
 def upload_record_public(row, include_validation=True):
@@ -1056,6 +1104,13 @@ def upload_record_public(row, include_validation=True):
         "member": row["member"],
         "version": row["version"],
         "replaces_upload_id": row.get("replaces_upload_id"),
+        "validation_done": row.get("validation_done") or 0,
+        "validation_total": row.get("validation_total") or 0,
+        "rules_version": row.get("rules_version") or "",
+        "poc": row.get("poc") or "",
+        "config_id": row.get("config_id") or "",
+        "archive_version": row.get("archive_version") or "",
+        "participants": row.get("participants") or "",
         "sha256": row["sha256"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -1079,6 +1134,16 @@ def constants_payload():
         "core_2d_vars": CORE_2D_VARS,
         "recommended_2d_vars": RECOMMENDED_2D_VARS,
         "three_d_vars": THREE_D_VARS,
+        "recommended_radiation_vars": RECOMMENDED_RADIATION_VARS,
+        "recommended_3d_level_vars": RECOMMENDED_3D_LEVEL_VARS,
+        "recommended_3d_alternatives": [list(a) for a in RECOMMENDED_3D_ALTERNATIVES],
+        "recommended_3d_levels_hpa": RECOMMENDED_3D_LEVELS_HPA,
+        "rules_version": RULES_VERSION,
+        "required_periods": REQUIRED_PERIODS,
+        "init_times": INIT_TIMES,
+        "init_labels": INIT_LABELS,
+        "archive_name_pattern": ARCHIVE_NAME_PATTERN,
+        "output_interval_hours": OUTPUT_INTERVAL_HOURS,
         "chunk_size": MAX_CHUNK_BYTES,
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "user_storage_quota_bytes": USER_STORAGE_QUOTA_BYTES,

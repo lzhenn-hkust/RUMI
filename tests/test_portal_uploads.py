@@ -36,16 +36,19 @@ class UploadWorkflowTests(unittest.TestCase):
         self.submissions_dir.mkdir()
 
         self.patches = ExitStack()
-        self.patches.enter_context(mock.patch.object(portal_api, "DATA_DIR", self.data_dir))
-        self.patches.enter_context(
-            mock.patch.object(portal_api, "INCOMING_DIR", self.incoming_dir)
-        )
-        self.patches.enter_context(
-            mock.patch.object(portal_api, "SUBMISSIONS_DIR", self.submissions_dir)
-        )
-        self.patches.enter_context(
-            mock.patch.object(portal_api, "LOG_DIR", self.data_dir / "logs")
-        )
+        for module in (portal_api, portal_lib):
+            self.patches.enter_context(
+                mock.patch.object(module, "DATA_DIR", self.data_dir)
+            )
+            self.patches.enter_context(
+                mock.patch.object(module, "INCOMING_DIR", self.incoming_dir)
+            )
+            self.patches.enter_context(
+                mock.patch.object(module, "SUBMISSIONS_DIR", self.submissions_dir)
+            )
+            self.patches.enter_context(
+                mock.patch.object(module, "LOG_DIR", self.data_dir / "logs")
+            )
 
         self.con = sqlite3.connect(":memory:")
         self.con.row_factory = sqlite3.Row
@@ -87,7 +90,7 @@ class UploadWorkflowTests(unittest.TestCase):
         upload_id,
         status,
         content=b"sample",
-        file_name="RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+        file_name="GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
         file_kind="netcdf",
         sha256=None,
         replaces_upload_id=None,
@@ -104,7 +107,7 @@ class UploadWorkflowTests(unittest.TestCase):
                 file_kind, status, experiment, model, event, metadata_json,
                 temp_path, sha256, replaces_upload_id, created_at, updated_at
             )
-            VALUES (?, 1, 'HKUST', ?, ?, ?, ?, ?, 'RUMI-GFS-FC', 'MODEL',
+            VALUES (?, 1, 'HKUST', ?, ?, ?, ?, ?, 'GFS-FC', 'MODEL',
                     'HRAIN2025', ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -116,7 +119,7 @@ class UploadWorkflowTests(unittest.TestCase):
                 status,
                 json.dumps(
                     {
-                        "experiment": "RUMI-GFS-FC",
+                        "experiment": "GFS-FC",
                         "model": "MODEL",
                         "event": "HRAIN2025",
                     }
@@ -160,9 +163,9 @@ class UploadWorkflowTests(unittest.TestCase):
     def test_same_filename_requires_explicit_replacement(self):
         self.insert_upload("existing-upload", "validated")
         payload = {
-            "file_name": "RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+            "file_name": "GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
             "file_size": 123,
-            "experiment": "RUMI-GFS-FC",
+            "experiment": "GFS-FC",
             "model": "MODEL",
             "event": "HRAIN2025",
         }
@@ -183,28 +186,110 @@ class UploadWorkflowTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["replaces_upload_id"], "existing-upload")
 
-    def test_archive_start_does_not_require_time_form_fields(self):
+    def test_partial_upload_is_reported_as_resumable(self):
+        self.con.execute(
+            """
+            INSERT INTO uploads(
+                upload_id, user_id, institution, file_name, file_size,
+                received_bytes, file_kind, status, experiment, model, event,
+                metadata_json, temp_path, created_at, updated_at
+            )
+            VALUES ('partial-upload', 1, 'HKUST',
+                    'GFS-FC-MODEL-HRAIN2025-20250804000000.nc',
+                    1000, 400, 'netcdf', 'receiving', 'GFS-FC', 'MODEL',
+                    'HRAIN2025', '{}', '/tmp/partial.part',
+                    '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+            """
+        )
+        self.con.commit()
         payload = {
-            "file_name": "RUMI-GFS-FC-MODEL-HRAIN2025.zip",
-            "file_size": 123,
-            "experiment": "RUMI-GFS-FC",
+            "file_name": "GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+            "file_size": 1000,
+            "experiment": "GFS-FC",
             "model": "MODEL",
             "event": "HRAIN2025",
+        }
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_upload_start(self.con)
+
+        self.assertEqual(raised.exception.status, 409)
+        self.assertEqual(raised.exception.details["code"], "resumable")
+        self.assertEqual(
+            raised.exception.details["existing"]["received_bytes"], 400
+        )
+
+    def test_completed_upload_is_still_a_duplicate_not_a_resume(self):
+        self.insert_upload("existing-upload", "validated")
+        payload = {
+            "file_name": "GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+            "file_size": 123,
+            "experiment": "GFS-FC",
+            "model": "MODEL",
+            "event": "HRAIN2025",
+        }
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_upload_start(self.con)
+
+        self.assertEqual(raised.exception.details["code"], "duplicate_filename")
+
+    def test_archive_name_drives_metadata(self):
+        # The participant retypes nothing: identity comes from the archive name
+        # and from the authenticated account.
+        payload = {
+            "file_name": "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz",
+            "file_size": 123,
         }
 
         with mock.patch.object(portal_api, "read_json", return_value=payload):
             result = portal_api.handle_upload_start(self.con)
 
         row = self.con.execute(
-            "SELECT file_kind, institution, metadata_json FROM uploads WHERE upload_id = ?",
+            """
+            SELECT file_kind, institution, model, event, experiment, poc,
+                   config_id, archive_version, metadata_json
+            FROM uploads WHERE upload_id = ?
+            """,
             (result["upload_id"],),
         ).fetchone()
+        self.assertEqual(row["file_kind"], "tar")
+        self.assertEqual(row["institution"], "HKUST")
+        self.assertEqual(row["model"], "MPAS")
+        self.assertEqual(row["event"], "HRAIN2025")
+        self.assertEqual(row["experiment"], "(archive)")
+        self.assertEqual(row["poc"], "LIU")
+        self.assertEqual(row["config_id"], "CONFIG01")
+        self.assertEqual(row["archive_version"], "01")
         metadata = json.loads(row["metadata_json"])
-        self.assertEqual(row["file_kind"], "zip")
         self.assertEqual(metadata["simulation_start_time"], "")
         self.assertEqual(metadata["forecast_lead_time_hours"], "")
 
-        self.assertEqual(row["institution"], "HKUST")
+    def test_bad_archive_name_is_rejected_with_an_example(self):
+        payload = {"file_name": "submission.tar.gz", "file_size": 123}
+
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_upload_start(self.con)
+
+        self.assertEqual(raised.exception.status, 400)
+        self.assertEqual(raised.exception.details["code"], "archive_name")
+        self.assertIn(
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz",
+            raised.exception.message,
+        )
+
+    def test_hyphenated_model_in_archive_name_is_rejected(self):
+        payload = {
+            "file_name": "HKUST-WRF-ARW-HRAIN2025-LIU-CONFIG01-r01.tar.gz",
+            "file_size": 123,
+        }
+
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_upload_start(self.con)
+
+        self.assertIn("WRFARW", raised.exception.message)
 
     def test_identical_content_is_rejected_as_duplicate(self):
         digest = portal_lib.hashlib.sha256(b"same").hexdigest()
@@ -212,14 +297,14 @@ class UploadWorkflowTests(unittest.TestCase):
             "accepted-upload",
             "validated",
             content=b"same",
-            file_name="RUMI-GFS-FC-OLD-HRAIN2025-20250804000000.nc",
+            file_name="GFS-FC-OLD-HRAIN2025-20250804000000.nc",
             sha256=digest,
         )
         temp_path = self.insert_upload(
             "duplicate-upload",
             "receiving",
             content=b"same",
-            file_name="RUMI-GFS-FC-NEW-HRAIN2025-20250804000000.nc",
+            file_name="GFS-FC-NEW-HRAIN2025-20250804000000.nc",
         )
 
         result = self.finish(
@@ -287,39 +372,97 @@ class UploadWorkflowTests(unittest.TestCase):
         self.assertTrue(Path(stored_path).exists())
         self.assertEqual(
             Path(stored_path).parent.relative_to(self.submissions_dir).parts,
-            ("hkust", "rumi-gfs-fc", "model", "HRAIN2025"),
+            ("hkust", "gfs-fc", "model", "HRAIN2025"),
         )
 
-    def test_valid_archive_is_marked_validated(self):
+    def test_archive_is_queued_for_background_validation(self):
         self.insert_upload(
             "archive-upload",
             "receiving",
             content=b"archive",
-            file_name="RUMI-GFS-FC-MODEL-HRAIN2025.zip",
+            file_name="HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.zip",
             file_kind="zip",
         )
 
-        result = self.finish(
+        with (
+            mock.patch.object(
+                portal_api, "read_json", return_value={"upload_id": "archive-upload"}
+            ),
+            mock.patch.object(portal_api.subprocess, "Popen") as popen,
+            mock.patch.object(
+                portal_api, "validate_submission"
+            ) as inline_validator,
+        ):
+            popen.return_value = mock.Mock(pid=4242)
+            result = portal_api.handle_upload_finish(self.con)
+
+        self.assertEqual(result["upload"]["status"], "queued")
+        inline_validator.assert_not_called()
+        command = popen.call_args[0][0]
+        self.assertIn("validate_worker.py", command[1])
+        self.assertEqual(command[2:], ["--upload-id", "archive-upload"])
+        self.assertTrue(popen.call_args[1]["start_new_session"])
+        row = self.con.execute(
+            "SELECT worker_pid FROM uploads WHERE upload_id = 'archive-upload'"
+        ).fetchone()
+        self.assertEqual(row["worker_pid"], 4242)
+
+    def test_failed_worker_launch_is_a_terminal_server_error(self):
+        self.insert_upload(
             "archive-upload",
-            {
-                "errors": [],
-                "warnings": [],
-                "summary": {
-                    "checked_netcdf_files": 5,
-                    "passed_netcdf_files": 5,
-                },
-            },
+            "receiving",
+            content=b"archive",
+            file_name="HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.zip",
+            file_kind="zip",
         )
 
-        self.assertEqual(result["upload"]["status"], "validated")
-        self.assertEqual(result["upload"]["file_kind"], "zip")
+        with (
+            mock.patch.object(
+                portal_api, "read_json", return_value={"upload_id": "archive-upload"}
+            ),
+            mock.patch.object(
+                portal_api.subprocess, "Popen", side_effect=OSError("no fork")
+            ),
+        ):
+            result = portal_api.handle_upload_finish(self.con)
+
+        self.assertEqual(result["upload"]["status"], "server_error")
+        self.assertIn(
+            "No submission was accepted",
+            result["upload"]["validation"]["errors"][0],
+        )
+
+    def test_stale_validation_is_reaped(self):
+        self.insert_upload("stuck-upload", "validating", content=b"x")
+        self.con.execute(
+            "UPDATE uploads SET worker_heartbeat = '2020-01-01T00:00:00Z' "
+            "WHERE upload_id = 'stuck-upload'"
+        )
+        self.con.commit()
+
+        portal_api.handle_uploads(self.con)
+
+        row = self.con.execute(
+            "SELECT status FROM uploads WHERE upload_id = 'stuck-upload'"
+        ).fetchone()
+        self.assertEqual(row["status"], "server_error")
+
+    def test_upload_status_is_scoped_to_the_owner(self):
+        self.insert_upload("owned-upload", "queued", content=b"x")
+        with mock.patch.object(portal_api, "query_one", return_value="owned-upload"):
+            result = portal_api.handle_upload_status(self.con)
+            self.assertEqual(result["upload"]["upload_id"], "owned-upload")
+            self.user["id"] = 2
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_upload_status(self.con)
+        self.assertEqual(raised.exception.status, 404)
 
     def test_finalization_error_becomes_terminal_server_error(self):
         self.insert_upload("blocked-upload", "receiving", content=b"valid")
         blocked_path = self.data_dir / "not-a-directory"
         blocked_path.write_text("blocked", encoding="utf-8")
 
-        with mock.patch.object(portal_api, "SUBMISSIONS_DIR", blocked_path):
+        with mock.patch.object(portal_lib, "SUBMISSIONS_DIR", blocked_path):
             result = self.finish(
                 "blocked-upload", {"errors": [], "warnings": [], "summary": {}}
             )
@@ -431,7 +574,7 @@ class SchemaMigrationTests(unittest.TestCase):
                 experiment, model, event, metadata_json, created_at, updated_at
             )
             VALUES ('legacy-upload', 1, 'legacy.nc', 1, 'netcdf', 'validated',
-                    'RUMI-GFS-FC', 'MODEL', 'HRAIN2025', '{}', 'now', 'now')
+                    'GFS-FC', 'MODEL', 'HRAIN2025', '{}', 'now', 'now')
             """
         )
 
@@ -458,48 +601,17 @@ class NetcdfValidationTests(unittest.TestCase):
             ],
         }
 
-    def structured_archive_result(self, member_name, lead_time):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            archive_path = Path(temp_dir) / "batch.zip"
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                archive.writestr(member_name, b"not-a-real-netcdf")
-            with mock.patch.object(
-                portal_lib,
-                "validate_netcdf",
-                return_value={
-                    "errors": [],
-                    "warnings": [],
-                    "summary": {
-                        "time_metadata": {
-                            "simulation_start_time": "2025-08-03T00:00:00Z",
-                            "initialization_time": "2025-08-03T00:00:00Z",
-                            "forecast_initialization_time": "2025-08-03T00:00:00Z",
-                            "forecast_lead_time_hours": lead_time,
-                        },
-                    },
-                },
-            ):
-                return portal_lib.validate_archive(
-                    archive_path,
-                    archive_path.name,
-                    {
-                        "experiment": "RUMI-GFS-FC",
-                        "model": "WRF",
-                        "event": "HRAIN2025",
-                    },
-                )
-
     def test_filename_parses_complete_experiment_and_model(self):
         parsed = portal_lib.parse_rumi_filename(
-            "RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc"
+            "GFS-FC-MPAS-HRAIN2025-20250804000000.nc"
         )
 
-        self.assertEqual(parsed["experiment"], "RUMI-GFS-FC")
+        self.assertEqual(parsed["experiment"], "GFS-FC")
         self.assertEqual(parsed["model"], "MPAS")
 
     def test_previous_filename_without_mode_is_rejected(self):
         parsed = portal_lib.parse_rumi_filename(
-            "RUMI-ERA5-WRF-MANGKHUT2018-20180916120000.nc"
+            "ERA5-WRF-MANGKHUT2018-20180916120000.nc"
         )
 
         self.assertIsNone(parsed)
@@ -568,9 +680,9 @@ class NetcdfValidationTests(unittest.TestCase):
         ):
             result = portal_lib.validate_netcdf(
                 Path("sample.nc"),
-                "RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+                "GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
                 {
-                    "experiment": "RUMI-GFS-FC",
+                    "experiment": "GFS-FC",
                     "model": "MODEL",
                     "event": "HRAIN2025",
                 },
@@ -602,9 +714,9 @@ class NetcdfValidationTests(unittest.TestCase):
         ):
             result = portal_lib.validate_netcdf(
                 Path("sample.nc"),
-                "RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc",
+                "GFS-FC-MPAS-HRAIN2025-20250804000000.nc",
                 {
-                    "experiment": "RUMI-ERA5-AN",
+                    "experiment": "ERA5-AN",
                     "model": "WRF",
                     "event": "HRAIN2025",
                 },
@@ -648,9 +760,9 @@ class NetcdfValidationTests(unittest.TestCase):
         ):
             result = portal_lib.validate_netcdf(
                 Path("sample.nc"),
-                "RUMI-ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc",
+                "ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc",
                 {
-                    "experiment": "RUMI-ERA5-AN",
+                    "experiment": "ERA5-AN",
                     "model": "WRF",
                     "event": "MANGKHUT2018",
                 },
@@ -661,92 +773,6 @@ class NetcdfValidationTests(unittest.TestCase):
             "(9.7 arc-seconds).",
             result["errors"],
         )
-
-    def test_archive_members_use_the_same_netcdf_validator(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            archive_path = Path(temp_dir) / "batch.zip"
-            member_name = (
-                "results/lead_024h/"
-                "RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc"
-            )
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                archive.writestr(member_name, b"not-a-real-netcdf")
-                archive.writestr("technical-notes.txt", "test")
-
-            with mock.patch.object(
-                portal_lib,
-                "validate_netcdf",
-                return_value={
-                    "errors": ["Standard core grid dimensions must be 171 lat by 234 lon."],
-                    "warnings": [],
-                    "summary": {
-                        "time_metadata": {
-                            "simulation_start_time": "2025-08-03T00:00:00Z",
-                            "initialization_time": "2025-08-03T00:00:00Z",
-                            "forecast_initialization_time": "2025-08-03T00:00:00Z",
-                            "forecast_lead_time_hours": "24",
-                        },
-                    },
-                },
-            ) as validator:
-                result = portal_lib.validate_archive(
-                    archive_path,
-                    archive_path.name,
-                    {
-                        "experiment": "RUMI-GFS-FC",
-                        "model": "MPAS",
-                        "event": "HRAIN2025",
-                    },
-                )
-
-        validator.assert_called_once()
-        self.assertEqual(result["summary"]["validated_netcdf_files"], 1)
-        self.assertIn(
-            member_name
-            + ": Standard core grid dimensions must be 171 lat by 234 lon.",
-            result["errors"],
-        )
-
-    def test_structured_archive_accepts_matching_lead_folder(self):
-        member_name = (
-            "RUMI-GFS-FC-WRF-HRAIN2025/lead_024h/"
-            "RUMI-GFS-FC-WRF-HRAIN2025-20250804000000.nc"
-        )
-        result = self.structured_archive_result(member_name, "24 hours")
-
-        self.assertEqual(result["errors"], [])
-        self.assertEqual(result["summary"]["checked_netcdf_files"], 1)
-        self.assertEqual(result["summary"]["passed_netcdf_files"], 1)
-        self.assertEqual(result["summary"]["lead_time_folders"], {"lead_024h": 1})
-
-    def test_structured_archive_rejects_lead_time_mismatch(self):
-        member_name = (
-            "RUMI-GFS-FC-WRF-HRAIN2025/lead_024h/"
-            "RUMI-GFS-FC-WRF-HRAIN2025-20250804000000.nc"
-        )
-        result = self.structured_archive_result(member_name, "48")
-
-        self.assertEqual(result["summary"]["passed_netcdf_files"], 0)
-        self.assertIn(
-            member_name
-            + ": Directory lead_024h does not match global attribute "
-            "forecast_lead_time_hours=48.",
-            result["errors"],
-        )
-
-    def test_structured_archive_requires_lead_directory(self):
-        member_name = (
-            "RUMI-GFS-FC-WRF-HRAIN2025/"
-            "RUMI-GFS-FC-WRF-HRAIN2025-20250804000000.nc"
-        )
-        result = self.structured_archive_result(member_name, "24")
-
-        self.assertIn(
-            member_name
-            + ": NetCDF file must be stored under exactly one lead_NNNh directory.",
-            result["errors"],
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

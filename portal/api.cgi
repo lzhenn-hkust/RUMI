@@ -1,6 +1,8 @@
 #!/home/lzhenn/array74/soft/anaconda3/bin/python3
 import json
 import os
+import secrets
+import subprocess
 import sys
 import traceback
 import urllib.parse
@@ -36,6 +38,7 @@ from portal_lib import (  # noqa: E402
     make_user_public,
     new_token,
     normalize_email,
+    parse_archive_name,
     parse_rumi_filename,
     require_role,
     safe_file_name,
@@ -45,6 +48,11 @@ from portal_lib import (  # noqa: E402
     user_storage_bytes,
     utcnow,
     validate_submission,
+    finalize_upload,
+    log_exception,
+    reap_stale_validations,
+    remove_upload_files,
+    storage_directory,
     verify_password,
     hash_password,
 )
@@ -181,7 +189,7 @@ def require_portal_header():
     if method in ("POST", "PUT", "DELETE") and session_token and action not in ("login", "register"):
         expected = csrf_value(session_token)
         provided = os.environ.get("HTTP_X_CSRF_TOKEN", "")
-        if not provided or not provided == expected:
+        if not provided or not secrets.compare_digest(provided, expected):
             raise PortalError(403, "Invalid security token. Refresh the page and try again.")
 
 
@@ -238,39 +246,6 @@ def too_many_login_attempts(con, email):
         (normalize_email(email), client_ip()),
     ).fetchone()
     return int(row["c"] or 0) >= 10
-
-
-def remove_upload_files(row):
-    for key in ("stored_path", "temp_path"):
-        value = row[key]
-        if not value:
-            continue
-        path = Path(value)
-        try:
-            path.relative_to(DATA_DIR)
-        except ValueError:
-            continue
-        if path.exists() and path.is_file():
-            path.unlink()
-        for parent in path.parents:
-            if parent == DATA_DIR or parent == SUBMISSIONS_DIR or parent == INCOMING_DIR:
-                break
-            try:
-                parent.rmdir()
-            except OSError:
-                break
-
-
-def log_exception(exc):
-    request_id = uuid.uuid4().hex[:12]
-    try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(LOG_DIR / "api_errors.log", "a", encoding="utf-8") as handle:
-            handle.write(f"\n[{utcnow()}] request_id={request_id} action={query_one('action')} type={type(exc).__name__}\n")
-            handle.write(traceback.format_exc())
-    except Exception:
-        pass
-    return request_id
 
 
 def metadata_from_payload(payload):
@@ -424,6 +399,29 @@ def handle_change_password(con):
     return {"ok": True}
 
 
+def handle_update_profile(con):
+    user = require_approved_user(con)
+    payload = read_json()
+    name = clean_text(payload.get("name", user["name"]), 120)
+    institution = clean_text(payload.get("institution", user["institution"]), 200)
+    poc_surname = clean_text(payload.get("poc_surname", ""), 80)
+    participants = clean_text(payload.get("participants", ""), 1000)
+    if not name or not institution:
+        raise PortalError(400, "Name and institution are required.")
+    con.execute(
+        """
+        UPDATE users
+        SET name = ?, institution = ?, poc_surname = ?, participants = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (name, institution, poc_surname, participants, utcnow(), user["id"]),
+    )
+    con.commit()
+    row = con.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+    return {"ok": True, "user": make_user_public(row)}
+
+
 def handle_admin_users(con):
     require_admin(con)
     users = [
@@ -541,6 +539,28 @@ def handle_upload_start(con):
     kind = file_kind(file_name)
     metadata = metadata_from_payload(payload)
     requested_replacement = clean_text(payload.get("replace_upload_id"), 80)
+    participants = clean_text(
+        payload.get("participants") or user.get("participants") or "", 1000
+    )
+
+    # A v3 archive carries its own identity in its name, and it spans several
+    # experiments, so nothing here is retyped by the participant.
+    archive = parse_archive_name(file_name) if kind in ("zip", "tar") else None
+    if kind in ("zip", "tar"):
+        if not archive:
+            raise PortalError(
+                400,
+                "Archive name must be <INSTITUTE>-<MODEL>-<EVENT>-<POC>-"
+                "<CONFIG>-r<NN>.tar.gz, for example "
+                "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz. Fields must "
+                "be uppercase letters and digits without hyphens, so a model "
+                "such as WRF-ARW is written WRFARW.",
+                {"code": "archive_name"},
+            )
+        metadata["event"] = archive["event"]
+        metadata["model"] = archive["model"]
+        metadata["experiment"] = "(archive)"
+
     if metadata["event"] not in constants_payload()["events"]:
         raise PortalError(400, "Select a valid RUMI event.")
     if not metadata["experiment"] or not metadata["model"]:
@@ -549,8 +569,9 @@ def handle_upload_start(con):
     if kind == "netcdf" and not parsed:
         raise PortalError(
             400,
-            "File name must follow <RUMI experiment>-<Model>-<Event>-"
-            "<YYYYMMDDHHMMSS>[_member][_vNN].nc.",
+            "File name must follow <experiment>-<Model>-<Event>-"
+            "<YYYYMMDDHHMMSS>[_member][_rNN].nc, for example "
+            "ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc.",
         )
     if parsed:
         comparisons = (
@@ -578,6 +599,22 @@ def handle_upload_start(con):
         (user["id"], file_name, *INACTIVE_UPLOAD_STATUSES),
     ).fetchone()
     if existing and requested_replacement != existing["upload_id"]:
+        # An unfinished transfer of the very same file is an interrupted upload,
+        # not a competing submission. Say so, and the browser offers Resume
+        # instead of asking whether to replace something.
+        if (
+            existing["status"] == "receiving"
+            and int(existing["file_size"]) == size
+            and int(existing["received_bytes"]) < size
+        ):
+            raise PortalError(
+                409,
+                "This file is already partly uploaded.",
+                {
+                    "code": "resumable",
+                    "existing": upload_record_public(existing),
+                },
+            )
         raise PortalError(
             409,
             "A submission with this file name already exists.",
@@ -600,9 +637,10 @@ def handle_upload_start(con):
         INSERT INTO uploads(
             upload_id, user_id, institution, file_name, file_size, received_bytes, file_kind,
             status, experiment, model, event, timestamp_utc, member, version,
-            metadata_json, temp_path, replaces_upload_id, created_at, updated_at
+            metadata_json, temp_path, replaces_upload_id, poc, config_id,
+            archive_version, participants, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, 0, ?, 'receiving', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, 0, ?, 'receiving', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             upload_id,
@@ -620,6 +658,10 @@ def handle_upload_start(con):
             json.dumps(metadata, ensure_ascii=True),
             str(temp_path),
             existing["upload_id"] if existing else None,
+            archive["poc"] if archive else (user.get("poc_surname") or ""),
+            archive["config"] if archive else "",
+            archive["version"] if archive else "",
+            participants,
             now,
             now,
         ),
@@ -660,6 +702,70 @@ def handle_upload_chunk(con):
     return {"ok": True, "received_bytes": received, "file_size": row["file_size"]}
 
 
+def queue_archive_validation(con, row):
+    """Hand an archive to a detached worker and return immediately.
+
+    A per-event archive holds several hundred NetCDF files and takes minutes to
+    check, while the web server's request timeout is 60 seconds. The worker is
+    started in its own session with its output redirected to a log file, so
+    neither the response nor the child depends on the other surviving.
+    """
+    upload_id = row["upload_id"]
+    now = utcnow()
+    con.execute(
+        """
+        UPDATE uploads
+        SET status = 'queued', validation_done = 0, validation_total = 0,
+            worker_heartbeat = ?, updated_at = ?
+        WHERE upload_id = ?
+        """,
+        (now, now, upload_id),
+    )
+    con.commit()
+
+    worker = BASE_DIR / "backend" / "validate_worker.py"
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOG_DIR / "worker.log", "a", encoding="utf-8") as log:
+            process = subprocess.Popen(
+                [sys.executable, str(worker), "--upload-id", upload_id],
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                cwd=str(BASE_DIR),
+            )
+        con.execute(
+            "UPDATE uploads SET worker_pid = ?, updated_at = ? WHERE upload_id = ?",
+            (process.pid, utcnow(), upload_id),
+        )
+        con.commit()
+    except Exception as exc:
+        request_id = log_exception(exc, context=f"queue:{upload_id}")
+        validation = {
+            "errors": [
+                "The upload was received but validation could not be started. "
+                f"No submission was accepted. Reference: {request_id}"
+            ],
+            "warnings": [],
+            "summary": {},
+        }
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'server_error', validation_json = ?, updated_at = ?
+            WHERE upload_id = ?
+            """,
+            (json.dumps(validation, ensure_ascii=True), utcnow(), upload_id),
+        )
+        con.commit()
+
+    record = con.execute(
+        "SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)
+    ).fetchone()
+    return {"ok": True, "upload": upload_record_public(record)}
+
+
 def handle_upload_finish(con):
     user = require_approved_user(con)
     payload = read_json()
@@ -668,10 +774,11 @@ def handle_upload_finish(con):
     if not row or row["user_id"] != user["id"]:
         raise PortalError(404, "Upload not found.")
     terminal_statuses = set(INACTIVE_UPLOAD_STATUSES) | set(ACCEPTED_UPLOAD_STATUSES)
-    inactive_placeholders = ", ".join("?" for _ in INACTIVE_UPLOAD_STATUSES)
     if row["status"] in terminal_statuses:
         return {"ok": True, "upload": upload_record_public(row)}
-    if row["status"] not in ("receiving", "validating"):
+    if row["status"] in ("queued", "validating"):
+        return {"ok": True, "upload": upload_record_public(row)}
+    if row["status"] != "receiving":
         raise PortalError(409, "Upload is not ready for validation.")
     if int(row["received_bytes"]) != int(row["file_size"]):
         raise PortalError(409, "Upload is incomplete.")
@@ -680,6 +787,11 @@ def handle_upload_finish(con):
     temp_path = Path(row["temp_path"])
     if not temp_path.exists():
         raise PortalError(404, "Temporary upload file is missing.")
+
+    if row["file_kind"] in ("zip", "tar"):
+        return queue_archive_validation(con, row)
+
+    # A single NetCDF file takes a fraction of a second, so it stays inline.
     metadata = json.loads(row["metadata_json"])
     now = utcnow()
     con.execute(
@@ -691,7 +803,7 @@ def handle_upload_finish(con):
         digest = sha256_file(temp_path)
         validation = validate_submission(temp_path, row["file_name"], metadata)
     except Exception as exc:
-        request_id = log_exception(exc)
+        request_id = log_exception(exc, context=f"validate:{upload_id}")
         validation = {
             "errors": [
                 "The server could not validate this file. "
@@ -700,153 +812,39 @@ def handle_upload_finish(con):
             "warnings": [],
             "summary": {},
         }
-        now = utcnow()
         con.execute(
             """
             UPDATE uploads
             SET status = 'server_error', validation_json = ?, updated_at = ?
             WHERE upload_id = ?
             """,
-            (json.dumps(validation, ensure_ascii=True), now, upload_id),
+            (json.dumps(validation, ensure_ascii=True), utcnow(), upload_id),
         )
         con.commit()
-        record = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
+        record = con.execute(
+            "SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)
+        ).fetchone()
         return {"ok": True, "upload": upload_record_public(record)}
 
-    if validation.get("errors"):
-        now = utcnow()
-        con.execute(
-            """
-            UPDATE uploads
-            SET status = 'rejected', sha256 = ?, validation_json = ?, updated_at = ?
-            WHERE upload_id = ?
-            """,
-            (
-                digest,
-                json.dumps(validation, ensure_ascii=True),
-                now,
-                upload_id,
-            ),
-        )
-        con.commit()
-        record = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
-        return {"ok": True, "upload": upload_record_public(record)}
-
-    accepted_placeholders = ", ".join("?" for _ in ACCEPTED_UPLOAD_STATUSES)
-    duplicate = con.execute(
-        f"""
-        SELECT * FROM uploads
-        WHERE user_id = ? AND sha256 = ? AND id != ?
-          AND upload_id != COALESCE(?, '')
-          AND status IN ({accepted_placeholders})
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (
-            user["id"],
-            digest,
-            row["id"],
-            row["replaces_upload_id"],
-            *ACCEPTED_UPLOAD_STATUSES,
-        ),
-    ).fetchone()
-    if duplicate:
-        validation["errors"] = [
-            f"Identical file content was already accepted as {duplicate['file_name']}."
-        ]
-        validation.setdefault("summary", {})["duplicate_upload_id"] = duplicate["upload_id"]
-        remove_upload_files(row)
-        now = utcnow()
-        con.execute(
-            """
-            UPDATE uploads
-            SET status = 'duplicate', temp_path = NULL, sha256 = ?,
-                validation_json = ?, updated_at = ?
-            WHERE upload_id = ?
-            """,
-            (
-                digest,
-                json.dumps(validation, ensure_ascii=True),
-                now,
-                upload_id,
-            ),
-        )
-        con.commit()
-        record = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
-        return {"ok": True, "upload": upload_record_public(record)}
-
-    final_dir = (
-        SUBMISSIONS_DIR
-        / slugify(user["institution"])
-        / slugify(row["experiment"])
-        / slugify(row["model"])
-        / row["event"]
-    )
-    final_path = final_dir / (row["upload_id"] + "_" + safe_file_name(row["file_name"]))
-    status = "validated"
-    try:
-        final_dir.mkdir(parents=True, exist_ok=True)
-        temp_path.replace(final_path)
-        now = utcnow()
-        con.execute(
-            """
-            UPDATE uploads
-            SET status = ?, stored_path = ?, temp_path = NULL, sha256 = ?,
-                validation_json = ?, updated_at = ?
-            WHERE upload_id = ?
-            """,
-            (
-                status,
-                str(final_path),
-                digest,
-                json.dumps(validation, ensure_ascii=True),
-                now,
-                upload_id,
-            ),
-        )
-        if row["replaces_upload_id"]:
-            con.execute(
-                f"""
-                UPDATE uploads
-                SET status = 'superseded', updated_at = ?
-                WHERE upload_id = ? AND user_id = ?
-                  AND status NOT IN ({inactive_placeholders})
-                """,
-                (
-                    now,
-                    row["replaces_upload_id"],
-                    user["id"],
-                    *INACTIVE_UPLOAD_STATUSES,
-                ),
-            )
-        con.commit()
-    except Exception as exc:
-        request_id = log_exception(exc)
-        validation["errors"] = [
-            "The file passed validation, but the server could not finalize it. "
-            f"No submission was accepted. Reference: {request_id}"
-        ]
-        now = utcnow()
-        con.execute(
-            """
-            UPDATE uploads
-            SET status = 'server_error', sha256 = ?, validation_json = ?, updated_at = ?
-            WHERE upload_id = ?
-            """,
-            (
-                digest,
-                json.dumps(validation, ensure_ascii=True),
-                now,
-                upload_id,
-            ),
-        )
-        con.commit()
-    record = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
+    record = finalize_upload(con, row, validation, digest)
     return {"ok": True, "upload": upload_record_public(record)}
+
+
+def handle_upload_status(con):
+    user = require_approved_user(con)
+    reap_stale_validations(con)
+    upload_id = query_one("upload_id")
+    row = con.execute("SELECT * FROM uploads WHERE upload_id = ?", (upload_id,)).fetchone()
+    if not row:
+        raise PortalError(404, "Upload not found.")
+    if user["role"] != "admin" and row["user_id"] != user["id"]:
+        raise PortalError(404, "Upload not found.")
+    return {"ok": True, "upload": upload_record_public(row)}
 
 
 def handle_uploads(con):
     user = require_approved_user(con)
+    reap_stale_validations(con)
     if user["role"] == "admin":
         rows = con.execute(
             """
@@ -900,6 +898,7 @@ def handle_download(con):
     allowed = {
         "RUMI_template_2d.nc": ("downloads/RUMI_template_2d.nc", "application/octet-stream"),
         "create_ncdf.py": ("downloads/create_ncdf.py", "text/x-python"),
+        "rumi_validate.py": ("downloads/rumi_validate.py", "text/x-python"),
     }
     name = query_one("file")
     if name not in allowed:
@@ -918,6 +917,7 @@ ROUTES = {
     "login": handle_login,
     "logout": handle_logout,
     "change_password": handle_change_password,
+    "update_profile": handle_update_profile,
     "admin_users": handle_admin_users,
     "admin_create_user": handle_admin_create_user,
     "admin_update_user": handle_admin_update_user,
@@ -927,6 +927,7 @@ ROUTES = {
     "upload_start": handle_upload_start,
     "upload_chunk": handle_upload_chunk,
     "upload_finish": handle_upload_finish,
+    "upload_status": handle_upload_status,
     "uploads": handle_uploads,
     "upload_delete": handle_upload_delete,
     "bootstrap_info": handle_bootstrap_info,
