@@ -21,6 +21,22 @@ Usage:
       3. Run the script
 
 Changelog:
+  v2.3 (2026-08-19): Dropped the "RUMI-" prefix from experiment identifiers
+                      and output file names (e.g. "RUMI-ERA5-AN" ->
+                      "ERA5-AN"), and switched the version token from "vNN"
+                      to "rNN" throughout. Renamed the radiation/3D variable
+                      groups from MANDATORY_* to RECOMMENDED_* to match the
+                      protocol's downgrade of those groups to
+                      recommended-not-required (missing radiation/3D
+                      variables no longer cause a submission to be
+                      rejected); this reference script still writes them
+                      unconditionally so it remains a complete example.
+  v2.2 (2026-08-19): Promoted SWDOWN/LWDOWN and added SWNET/SWDIR/LWNET as
+                      mandatory 2D radiation variables (new
+                      MANDATORY_RADIATION_2D_VARS group, written
+                      unconditionally like the core 2D variables). Added Q
+                      and W to MANDATORY_3D_VARS. Matches the expanded RUMI
+                      protocol mandatory-variable checklist.
   v2.1 (2026-07-29): Updated the core grid to 9.7 arc-seconds (234 x 171)
                       and added analysis/forecast experiment tags.
   v2.0 (2026-03-30): Complete rewrite for RUMI protocol. 2D gridded output
@@ -28,7 +44,7 @@ Changelog:
 '''
 
 __title__   = 'RUMI NetCDF creation script'
-__version__ = 'v2.1 (2026-07-29)'
+__version__ = 'v2.3 (2026-08-19)'
 __author__  = 'Zhenning LI'
 
 import numpy as np
@@ -79,13 +95,24 @@ RECOMMENDED_2D_SURFACE_VARS = [
     ('TD2M',    'dew_point_temperature',                     '2-meter dewpoint temperature',                    'K',     {'height': '2 m'}),
     ('LH',      'surface_upward_latent_heat_flux',           'Surface latent heat flux (positive upward)',       'W m-2', {'cell_methods': 'time: mean'}),
     ('HFX',     'surface_upward_sensible_heat_flux',         'Surface sensible heat flux (positive upward)',     'W m-2', {'cell_methods': 'time: mean'}),
-    ('SWDOWN',  'surface_downwelling_shortwave_flux_in_air', 'Downward shortwave radiation at surface',         'W m-2', {'cell_methods': 'time: mean'}),
     ('SWUP',    'surface_upwelling_shortwave_flux_in_air',   'Upward shortwave radiation at surface',           'W m-2', {'cell_methods': 'time: mean'}),
-    ('LWDOWN',  'surface_downwelling_longwave_flux_in_air',  'Downward longwave radiation at surface',          'W m-2', {'cell_methods': 'time: mean'}),
     ('LWUP',    'surface_upwelling_longwave_flux_in_air',    'Upward longwave radiation at surface',            'W m-2', {'cell_methods': 'time: mean'}),
     ('GRDFLX',  'downward_heat_flux_at_ground_level_in_soil','Ground heat flux (positive downward)',            'W m-2', {'cell_methods': 'time: mean'}),
     ('WSPD10M', 'wind_speed',                                '10-meter wind speed',                             'm s-1', {'height': '10 m'}),
     ('WDIR10M', 'wind_from_direction',                       '10-meter wind direction (meteorological)',        'degree', {'height': '10 m'}),
+]
+
+# Recommended 2D radiation variables. The RUMI protocol treats these as
+# recommended rather than required (a submission missing them is still
+# accepted), but this reference script writes them unconditionally, like
+# CORE_2D_VARS, regardless of the ``include_recommended`` flag, so it
+# remains a complete example.
+RECOMMENDED_RADIATION_VARS = [
+    ('SWDOWN', 'surface_downwelling_shortwave_flux_in_air',          'Downward shortwave radiation at surface',                     'W m-2', {'cell_methods': 'time: mean'}),
+    ('SWNET',  'surface_net_downward_shortwave_flux',                'Net shortwave radiation at surface (positive downward)',      'W m-2', {'cell_methods': 'time: mean'}),
+    ('SWDIR',  'surface_direct_downwelling_shortwave_flux_in_air',   'Direct-beam downward shortwave radiation at surface',         'W m-2', {'cell_methods': 'time: mean'}),
+    ('LWDOWN', 'surface_downwelling_longwave_flux_in_air',           'Downward longwave radiation at surface',                      'W m-2', {'cell_methods': 'time: mean'}),
+    ('LWNET',  'surface_net_downward_longwave_flux',                 'Net longwave radiation at surface (positive downward)',       'W m-2', {'cell_methods': 'time: mean'}),
 ]
 
 RECOMMENDED_2D_DIAG_VARS = [
@@ -110,19 +137,22 @@ RECOMMENDED_2D_DIAG_VARS = [
     ('UH_MAX',      '-',                  'Maximum updraft helicity over output interval (2-5 km layer)',  'm2 s-2',     {}),
 ]
 
-MANDATORY_3D_VARS = [
+# Recommended 3D pressure-level variables. Recommended rather than required
+# by the protocol, but written unconditionally by this reference script
+# (when include_3d is True) so it remains a complete example.
+RECOMMENDED_3D_LEVEL_VARS = [
     ('T',     'air_temperature',                     'Air temperature on pressure levels',       'K',      {}),
     ('Z',     'geopotential_height',                 'Geopotential height on pressure levels',   'm',      {}),
     ('RH',    'relative_humidity',                   'Relative humidity on pressure levels',     '1',      {'valid_range': np.array([0.0, 1.0], dtype='f4')}),
     ('U',     'eastward_wind',                       'Eastward wind on pressure levels',         'm s-1',  {}),
     ('V',     'northward_wind',                      'Northward wind on pressure levels',        'm s-1',  {}),
     ('OMEGA', 'lagrangian_tendency_of_air_pressure', 'Vertical velocity on pressure levels',    'Pa s-1', {}),
+    ('Q',     'specific_humidity',                   'Specific humidity on pressure levels',     'kg kg-1', {}),
+    ('W',     'upward_air_velocity',                 'Vertical velocity (geometric) on pressure levels', 'm s-1', {}),
 ]
 
 RECOMMENDED_3D_VARS = [
     ('THETA', 'air_potential_temperature',                  'Potential temperature on pressure levels',   'K',       {}),
-    ('Q',     'specific_humidity',                          'Specific humidity on pressure levels',       'kg kg-1', {}),
-    ('W',     'upward_air_velocity',                        'Vertical velocity in height coordinates',    'm s-1',   {}),
     ('QC',    'mass_fraction_of_cloud_liquid_water_in_air', 'Cloud liquid water mixing ratio',            'kg kg-1', {}),
     ('QI',    'mass_fraction_of_cloud_ice_in_air',          'Cloud ice mixing ratio',                     'kg kg-1', {}),
     ('QR',    'mass_fraction_of_rain_in_air',               'Rain water mixing ratio',                    'kg kg-1', {}),
@@ -137,7 +167,7 @@ def set_info():
     '''Set experiment metadata. Update this for your simulation.'''
     info = {
         # Experiment identification
-        'experiment':       'RUMI-ERA5-AN',
+        'experiment':       'ERA5-AN',
         'event':            'MANGKHUT2018',
         'event_name':       'Typhoon Mangkhut (2018)',
         'model':            'WRF',
@@ -166,7 +196,7 @@ def set_info():
         'contact':        'your.email@institution.edu',
         'creator_name':   'Your Name',
         'creation_date':  datetime.now(timezone.utc).strftime('%Y-%m-%d'),
-        'version':        'v01',
+        'version':        'r01',
 
         # Physics parameterizations (update for your model)
         'microphysics_scheme':    'Morrison double-moment',
@@ -318,6 +348,11 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
         for vdef in CORE_2D_VARS:
             _add_2d_var(*vdef)
 
+        # ---- Recommended radiation 2D variables (written unconditionally
+        #      by this reference script; see module docstring) ----
+        for vdef in RECOMMENDED_RADIATION_VARS:
+            _add_2d_var(*vdef)
+
         # ---- Recommended 2D variables ----
         if include_recommended:
             for vdef in RECOMMENDED_2D_SURFACE_VARS:
@@ -327,7 +362,7 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
 
         # ---- 3D variables on pressure levels ----
         if include_3d:
-            for vdef in MANDATORY_3D_VARS:
+            for vdef in RECOMMENDED_3D_LEVEL_VARS:
                 _add_3d_var(*vdef)
             if include_recommended:
                 for vdef in RECOMMENDED_3D_VARS:
@@ -342,7 +377,7 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
         ds.source       = f"{info['model']}"
         ds.history      = (f"Created {info['creation_date']} with "
                            f"{__title__} {__version__}")
-        ds.references   = 'RUMI Protocol v1.2 (2026)'
+        ds.references   = 'RUMI Phase 1 output protocol'
         ds.comment      = 'Example output file; replace with actual model data'
 
         # RUMI-specific
@@ -428,11 +463,16 @@ def fill_example_data(fpath):
         ds.variables['PSFC'][0]        = rng.uniform(99000, 102000, (nlat, nlon)).astype('f4')
         ds.variables['Q2M'][0]         = rng.uniform(0.010, 0.025, (nlat, nlon)).astype('f4')
 
+        # Recommended radiation 2D (present unconditionally, like core 2D)
+        for vname in ['SWDOWN', 'SWNET', 'SWDIR', 'LWDOWN', 'LWNET']:
+            if vname in ds.variables:
+                ds.variables[vname][0] = rng.uniform(-50, 500, (nlat, nlon)).astype('f4')
+
         # Recommended 2D (if present)
         for vname in ['TSK', 'TD2M']:
             if vname in ds.variables:
                 ds.variables[vname][0] = rng.uniform(295, 310, (nlat, nlon)).astype('f4')
-        for vname in ['LH', 'HFX', 'SWDOWN', 'SWUP', 'LWDOWN', 'LWUP', 'GRDFLX']:
+        for vname in ['LH', 'HFX', 'SWUP', 'LWUP', 'GRDFLX']:
             if vname in ds.variables:
                 ds.variables[vname][0] = rng.uniform(-50, 500, (nlat, nlon)).astype('f4')
         if 'WSPD10M' in ds.variables:
@@ -440,7 +480,7 @@ def fill_example_data(fpath):
         if 'WDIR10M' in ds.variables:
             ds.variables['WDIR10M'][0] = rng.uniform(0, 360, (nlat, nlon)).astype('f4')
 
-        # 3D mandatory (if present)
+        # 3D recommended (if present)
         if 'T' in ds.variables and len(ds.variables['T'].dimensions) == 4:
             ds.variables['T'][0]     = rng.uniform(200, 310, (npres, nlat, nlon)).astype('f4')
             ds.variables['Z'][0]     = rng.uniform(0, 30000, (npres, nlat, nlon)).astype('f4')
@@ -448,6 +488,8 @@ def fill_example_data(fpath):
             ds.variables['U'][0]     = rng.uniform(-50, 50, (npres, nlat, nlon)).astype('f4')
             ds.variables['V'][0]     = rng.uniform(-50, 50, (npres, nlat, nlon)).astype('f4')
             ds.variables['OMEGA'][0] = rng.uniform(-5, 5, (npres, nlat, nlon)).astype('f4')
+            ds.variables['Q'][0]     = rng.uniform(0.0001, 0.02, (npres, nlat, nlon)).astype('f4')
+            ds.variables['W'][0]     = rng.uniform(-5, 5, (npres, nlat, nlon)).astype('f4')
 
     print(f'Filled example data: {fpath}')
 
