@@ -167,18 +167,25 @@ the only place 3.11+ syntax would be caught.
    ssh mini 'scp /tmp/rumi-release.tar.gz hqlx74:/tmp/rumi-release.tar.gz'
    ```
 
-3. Before extraction, back up the site root and private SQLite database:
+3. Before extraction, back up the code and the private SQLite database. Use the
+   excludes from "Backups — read this before running one" above: without them
+   this step copies every participant submission into a quota-bearing home.
 
    ```bash
-   ssh mini 'ssh -tt hqlx74 "tar -czf /home/lzhenn/RUMI-site-backup-<date>.tar.gz -C /home/lzhenn/RUMI ."'
-   ssh mini 'ssh -tt hqlx74 "cp -p /home/lzhenn/RUMI_portal_private/rumi_portal.sqlite3 /home/lzhenn/RUMI_portal_private/rumi_portal.sqlite3.backup-<date>"'
+   ssh mini 'ssh hqlx74 "tar -czf /home/lzhenn/RUMI-code-backup-<stamp>.tar.gz --exclude=.portal_private --exclude=__pycache__ --exclude=./data -C /home/lzhenn/RUMI ."'
+   ssh mini 'ssh hqlx74 "cp -p /home/lzhenn/RUMI_portal_private/rumi_portal.sqlite3 /home/lzhenn/RUMI_portal_private/rumi_portal.sqlite3.backup-<stamp>"'
    ```
 
-4. Extract with `--strip-components=1` because the local archive has a `portal/` prefix but the server files belong at the site root:
+4. Stage first, then extract with `--strip-components=1` because the local
+   archive has a `portal/` prefix but the server files belong at the site root:
 
    ```bash
-   ssh mini 'ssh -tt hqlx74 "tar -xzf /tmp/rumi-release.tar.gz --strip-components=1 -C /home/lzhenn/RUMI"'
+   ssh mini 'ssh hqlx74 "rm -rf /tmp/rumi-stage && mkdir -p /tmp/rumi-stage && tar -xzf /tmp/rumi-release.tar.gz --strip-components=1 -C /tmp/rumi-stage && cd /tmp/rumi-stage && /home/lzhenn/array74/soft/anaconda3/bin/python3 -m py_compile backend/*.py"'
+   ssh mini 'ssh hqlx74 "tar -xzf /tmp/rumi-release.tar.gz --strip-components=1 -C /home/lzhenn/RUMI"'
    ```
+
+   Compare the staged SHA-256 against the local file before overwriting the
+   live site, and clean up `/tmp/rumi-stage` afterwards.
 
 5. Verify the public index and API, compare SHA-256 hashes, and confirm the
    SQLite schema after the first API request. The API applies additive schema
@@ -238,3 +245,37 @@ The SQLite database is the authoritative index. Institution is stored as a submi
   browser accepts a v3 archive name and rejects the legacy prefixed form.
   Backups: `/home/lzhenn/RUMI-code-backup-20260819-113231.tar.gz` and
   `rumi_portal.sqlite3.backup-20260819-113231`.
+
+- **2026-08-19 (later the same day)** — Two defects found by running the real
+  pipeline against real NetCDF, after the v3 release above had already been
+  verified structurally.
+
+  1. Every archive submission was being rejected. `api.cgi` writes
+     `experiment = "(archive)"` on an archive upload row, because one archive
+     spans several experiments and the column holds one value;
+     `validate_archive` passed that archive-level metadata to every member, so
+     each file's `ERA5-AN` was compared against the placeholder. Fixed by
+     reading the experiment from the member's own directory. Nothing caught it
+     because every archive test patches `validate_netcdf`, and the shipped
+     validator walks directories and has no upload row, so it passed the same
+     archive.
+  2. `downloads/rumi_validate.py` reported "NetCDF file could not be read" for
+     every file when the broken anaconda ncdump was first on PATH. It now
+     probes each candidate with a no-argument usage check and falls back to
+     `/usr/bin/ncdump`; when none runs it exits 2 naming the linker error.
+
+  Both now covered by tests that use real NetCDF files and fail if the fixes
+  are reverted, including one asserting the portal and `rumi_validate.py` reach
+  the same verdict on the same archive.
+
+  Verified on the server after deploy: the portal accepts a well-formed archive
+  (12/12 files) and rejects one missing its required final timestamp;
+  `rumi_validate.py` selects `/usr/bin/ncdump` over the broken anaconda build
+  and agrees with the portal. Backups:
+  `/home/lzhenn/RUMI-code-backup-20260819-archive-experiment-fix.tar.gz` and
+  `rumi_portal.sqlite3.backup-20260819-archive-experiment-fix`.
+
+  Lesson worth keeping: mocking the expensive dependency in every test of a
+  subsystem leaves the integration between them untested, and that is exactly
+  where the metadata contract broke. At least one test per subsystem should run
+  the real thing.
