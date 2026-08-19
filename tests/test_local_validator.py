@@ -14,6 +14,7 @@ rule there and forgets to regenerate, this test fails.
 """
 
 import importlib.util
+import os
 import json
 import shutil
 import subprocess
@@ -244,3 +245,87 @@ class LocalValidatorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrokenNcdumpTests(unittest.TestCase):
+    """A broken ncdump must not be reported as broken submission data.
+
+    hqlx74 carries an anaconda ncdump that dies with "GLIBC_2.25 not found".
+    The portal self-checks and refuses to use it; the shipped validator did
+    not, so it emitted "NetCDF file could not be read" for every file in the
+    archive and pointed the participant at their data instead of their
+    toolchain. Participants run this on machines we do not control, so it has
+    to survive exactly that.
+    """
+
+    GLIBC_ERROR = (
+        "ncdump: /lib64/libc.so.6: version `GLIBC_2.25' not found "
+        "(required by libcrypto.so.3)"
+    )
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.broken_dir = self.tmp / "broken-bin"
+        self.broken_dir.mkdir()
+        broken = self.broken_dir / "ncdump"
+        # A Python stub, not a shell one: the real message contains a backtick
+        # and an apostrophe, which no single sh quoting style survives.
+        broken.write_text(
+            "#!" + sys.executable + "\n"
+            "import sys\n"
+            "sys.stderr.write(" + repr(self.GLIBC_ERROR + "\n") + ")\n"
+            "raise SystemExit(1)\n"
+        )
+        broken.chmod(0o755)
+        self.broken = broken
+
+        sys.path.insert(0, str(ROOT / "tests"))
+        from fixtures.make_fixture_archive import make_fixture  # noqa: PLC0415
+
+        self.archive = make_fixture(
+            self.tmp / "fixture",
+            hours=3,
+            real_netcdf=netcdf4_available(),
+            archive="tar.gz",
+        )["archive"]
+
+    def run_with_env(self, env_overrides, args):
+        env = dict(os.environ, **env_overrides)
+        return subprocess.run(
+            [sys.executable, str(GENERATED)] + list(args),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+
+    @unittest.skipUnless(ncdump_available(), "needs a working ncdump to fall back to")
+    @unittest.skipUnless(netcdf4_available(), "fixture needs netCDF4 to write real files")
+    def test_broken_ncdump_earlier_on_path_is_skipped(self):
+        """A conda ncdump shadowing a working one must not decide the outcome."""
+        result = self.run_with_env(
+            {"PATH": str(self.broken_dir) + os.pathsep + os.environ.get("PATH", "")},
+            ["--reader", "ncdump", str(self.archive)],
+        )
+        self.assertEqual(
+            result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        self.assertNotIn("could not be read", result.stdout)
+
+    def test_only_broken_ncdump_reports_tooling_not_bad_data(self):
+        """Exit 2 and name the linker error, rather than failing every file."""
+        result = self.run_with_env(
+            {"PATH": str(self.broken_dir), "RUMI_NCDUMP": str(self.broken)},
+            ["--reader", "ncdump", str(self.archive)],
+        )
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 2, combined)
+        self.assertIn("failed to run", combined)
+        self.assertIn("GLIBC_2.25", combined)
+        self.assertNotIn(
+            "could not be read",
+            combined,
+            "a broken toolchain must not be reported as unreadable submission files",
+        )

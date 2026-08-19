@@ -291,11 +291,80 @@ def _facts_via_netcdf4(path):
     }
 
 
+def _ncdump_candidates():
+    """Every ncdump worth trying, best first, de-duplicated.
+
+    shutil.which() returns only the first match on PATH, which is not enough:
+    a conda environment can shadow a working system ncdump with a broken one.
+    """
+    seen = set()
+    ordered = []
+
+    def offer(path):
+        if not path:
+            return
+        path = str(path)
+        if path in seen:
+            return
+        seen.add(path)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            ordered.append(path)
+
+    offer(os.environ.get("RUMI_NCDUMP"))
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if directory:
+            offer(os.path.join(directory, "ncdump"))
+    for fallback in ("/usr/bin/ncdump", "/usr/local/bin/ncdump", "/opt/homebrew/bin/ncdump"):
+        offer(fallback)
+    return ordered
+
+
+def _ncdump_is_usable(path):
+    """Probe an ncdump binary without handing it a data file.
+
+    Running it with no arguments prints a usage message; a binary that cannot
+    load its libraries prints a linker error instead. Probing this way means a
+    genuinely corrupt submission file can never be mistaken for broken tooling.
+    Returns (ok, detail).
+    """
+    try:
+        proc = subprocess.run(
+            [path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    output = proc.stdout or ""
+    if "[-" in output:
+        return True, ""
+    return False, (output.strip().splitlines() or ["produced no usage message"])[0]
+
+
 def _find_ncdump():
-    candidate = os.environ.get("RUMI_NCDUMP")
-    if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-        return candidate
-    return shutil.which("ncdump")
+    """Return the first ncdump that actually runs, or None.
+
+    A broken ncdump used to surface as "file could not be read" on every single
+    file in the submission, which points the participant at their data instead
+    of at their toolchain.
+    """
+    for candidate in _ncdump_candidates():
+        ok, _ = _ncdump_is_usable(candidate)
+        if ok:
+            return candidate
+    return None
+
+
+def _ncdump_failure_report():
+    lines = []
+    for candidate in _ncdump_candidates():
+        ok, detail = _ncdump_is_usable(candidate)
+        if not ok:
+            lines.append("  " + candidate + ": " + detail)
+    return lines
 
 
 def _run_ncdump(ncdump_exe, args, timeout=90):
@@ -358,6 +427,24 @@ def _resolve_reader(choice):
         raise ReaderUnavailable(
             "the netCDF4 Python package is not installed. Install it with "
             "'pip install netCDF4', or rerun with --reader ncdump."
+        )
+    broken = _ncdump_failure_report()
+    if broken:
+        # ncdump exists but cannot run. Say so plainly: this is a toolchain
+        # problem, not a problem with the files being submitted.
+        detail = "\\n".join(broken)
+        if choice == "ncdump":
+            raise ReaderUnavailable(
+                "every ncdump found on this machine failed to run:\\n" + detail
+                + "\\nInstall the netCDF4 Python package ('pip install netCDF4') "
+                "or point RUMI_NCDUMP at a working ncdump."
+            )
+        raise ReaderUnavailable(
+            "no NetCDF reader is available. The netCDF4 Python package is not "
+            "installed, and every ncdump found on this machine failed to run:\\n"
+            + detail
+            + "\\nInstall the netCDF4 Python package ('pip install netCDF4') or "
+            "point RUMI_NCDUMP at a working ncdump."
         )
     if choice == "ncdump":
         raise ReaderUnavailable(
