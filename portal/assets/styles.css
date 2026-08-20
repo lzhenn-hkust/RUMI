@@ -793,6 +793,18 @@ table {
   min-width: 940px;
 }
 
+.users-table {
+  min-width: 980px;
+}
+
+.users-table td[data-label="Role"] {
+  min-width: 118px;
+}
+
+.users-table .role-select {
+  min-width: 106px;
+}
+
 th,
 td {
   border-bottom: 1px solid var(--line);

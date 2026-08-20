@@ -377,7 +377,7 @@ function renderUsers(users) {
     if (user.status !== "approved") actions.push(`<button data-action="approve" data-id="${user.id}">Approve</button>`);
     if (user.status !== "disabled") actions.push(`<button data-action="disable" data-id="${user.id}">Disable</button>`);
     if (user.status !== "deleted") actions.push(`<button data-action="delete" data-id="${user.id}">Delete</button>`);
-    const roleSelect = `<select data-role="${user.id}">
+    const roleSelect = `<select class="role-select" data-role="${user.id}" aria-label="Role for ${escapeHtml(user.email)}">
       <option value="modeler"${user.role === "modeler" ? " selected" : ""}>modeler</option>
       <option value="admin"${user.role === "admin" ? " selected" : ""}>admin</option>
     </select>`;
