@@ -105,6 +105,16 @@ PRIVATE_DIR_MODE = 0o770
 PRIVATE_FILE_MODE = 0o660
 REGISTRATION_CODE_KEY = "registration_code"
 
+INSTITUTION_ALIASES = {
+    "hkust": "HKUST",
+    "hong kong university of science and technology": "HKUST",
+    "the hong kong university of science and technology": "HKUST",
+    "hong kong university of science & technology": "HKUST",
+    "the hong kong university of science & technology": "HKUST",
+    "hong kong university of science and technology (hkust)": "HKUST",
+    "the hong kong university of science and technology (hkust)": "HKUST",
+}
+
 INACTIVE_UPLOAD_STATUSES = (
     "deleted",
     "duplicate",
@@ -148,6 +158,14 @@ def slugify(value):
 
 def normalize_email(email):
     return (email or "").strip().lower()
+
+
+def canonical_institution(value):
+    """Return the coordination team's canonical short institution name."""
+    cleaned = " ".join(str(value or "").strip().split())
+    if not cleaned:
+        return ""
+    return INSTITUTION_ALIASES.get(cleaned.casefold(), cleaned)
 
 
 def ensure_dirs():
@@ -613,7 +631,7 @@ def make_user_public(row):
         "id": row["id"],
         "email": row["email"],
         "name": row["name"],
-        "institution": row["institution"],
+        "institution": canonical_institution(row["institution"]),
         "role": row["role"],
         "status": row["status"],
         "created_at": row["created_at"],

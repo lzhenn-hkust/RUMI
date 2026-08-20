@@ -33,6 +33,16 @@ class ParticipationProfileTests(unittest.TestCase):
     def tearDown(self):
         self.con.close()
 
+    def test_institution_aliases_use_canonical_short_name(self):
+        self.assertEqual(
+            portal_lib.canonical_institution(
+                "The Hong Kong University of Science and Technology"
+            ),
+            "HKUST",
+        )
+        self.assertEqual(portal_lib.canonical_institution(" HKUST "), "HKUST")
+        self.assertEqual(portal_lib.canonical_institution("KNMI"), "KNMI")
+
     def test_known_poc_is_seeded_from_participation_registry(self):
         portal_lib.seed_participation_profiles(self.con)
 

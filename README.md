@@ -133,6 +133,10 @@ before accepting a submission.
 ## Structured Archives
 
 Participants upload one `.zip` or `.tar.gz` structured archive for an event.
+Use the coordination team's canonical short institution identifier in the
+archive filename and NetCDF metadata. For example, use `HKUST` rather than
+`Hong Kong University of Science and Technology`.
+
 The archive filename must contain only the institution, model, event, and point
 of contact. Configuration and revision details belong in
 `Participant_Model_Documentation.pdf`.

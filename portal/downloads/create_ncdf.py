@@ -160,7 +160,7 @@ def set_info():
         'model_top_pressure':    '50 hPa',
 
         # Contact
-        'institution':    'Hong Kong University of Science and Technology',
+        'institution':    'HKUST',
         'contact':        'your.email@institution.edu',
         'creator_name':   'Your Name',
         'creation_date':  datetime.now(timezone.utc).strftime('%Y-%m-%d'),

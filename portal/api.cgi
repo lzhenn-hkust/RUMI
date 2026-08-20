@@ -24,6 +24,7 @@ from portal_lib import (  # noqa: E402
     PortalError,
     constants_payload,
     connect_db,
+    canonical_institution,
     create_session,
     csrf_value,
     destroy_session,
@@ -339,7 +340,7 @@ def handle_register(con):
     payload = read_json()
     email = normalize_email(payload.get("email"))
     name = clean_text(payload.get("name"), 120)
-    institution = clean_text(payload.get("institution"), 200)
+    institution = canonical_institution(clean_text(payload.get("institution"), 200))
     password = payload.get("password") or ""
     registration_code = clean_text(payload.get("registration_code"), 120)
     if not email or not name or not institution or not password:
@@ -487,7 +488,7 @@ def handle_admin_create_user(con):
     payload = read_json()
     email = normalize_email(payload.get("email"))
     name = clean_text(payload.get("name"), 120)
-    institution = clean_text(payload.get("institution"), 200)
+    institution = canonical_institution(clean_text(payload.get("institution"), 200))
     role = payload.get("role") if payload.get("role") in ("modeler", "admin") else "modeler"
     status = payload.get("status") if payload.get("status") in ("pending", "approved", "disabled") else "approved"
     password = payload.get("password") or new_token()[:16]
@@ -527,7 +528,9 @@ def handle_admin_update_user(con):
     status = payload.get("status") if payload.get("status") in ("pending", "approved", "disabled", "deleted") else row["status"]
     last_admin_guard(con, user_id, role, status)
     name = clean_text(payload.get("name", row["name"]), 120)
-    institution = clean_text(payload.get("institution", row["institution"]), 200)
+    institution = canonical_institution(
+        clean_text(payload.get("institution", row["institution"]), 200)
+    )
     now = utcnow()
     con.execute(
         "UPDATE users SET name = ?, institution = ?, role = ?, status = ?, updated_at = ? WHERE id = ?",
@@ -680,7 +683,7 @@ def handle_upload_start(con):
         (
             upload_id,
             user["id"],
-            user["institution"],
+            canonical_institution(user["institution"]),
             file_name,
             size,
             kind,
