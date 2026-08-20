@@ -9,6 +9,8 @@ own session; the browser follows along through the `upload_status` action.
 Run as:  python3 validate_worker.py --upload-id <id>
 """
 import argparse
+from contextlib import contextmanager
+import fcntl
 import os
 import sys
 import time
@@ -20,6 +22,7 @@ from portal_lib import (  # noqa: E402
     connect_db,
     finalize_upload,
     log_exception,
+    LOG_DIR,
     sha256_file,
     upload_record_public,
     utcnow,
@@ -30,6 +33,29 @@ import json  # noqa: E402
 
 HEARTBEAT_EVERY_FILES = 20
 HEARTBEAT_EVERY_SECONDS = 20.0
+
+
+@contextmanager
+def validation_slot():
+    """Serialize archive validation so uploads cannot spawn unlimited ncdump work."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    fd = os.open(
+        LOG_DIR / "validation.lock",
+        os.O_RDWR | os.O_CREAT,
+        0o600,
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        lock = os.fdopen(fd, "a+", encoding="ascii")
+    except Exception:
+        os.close(fd)
+        raise
+    with lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def claim(con, upload_id):
@@ -96,6 +122,11 @@ def record_server_error(con, upload_id, message):
 
 
 def validate_upload(upload_id):
+    with validation_slot():
+        return _validate_upload(upload_id)
+
+
+def _validate_upload(upload_id):
     with connect_db() as con:
         row = claim(con, upload_id)
         if row is None:

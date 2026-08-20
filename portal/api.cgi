@@ -18,6 +18,7 @@ from portal_lib import (  # noqa: E402
     INCOMING_DIR,
     LOG_DIR,
     MAX_CHUNK_BYTES,
+    MAX_PENDING_VALIDATIONS,
     MAX_UPLOAD_BYTES,
     USER_STORAGE_QUOTA_BYTES,
     PortalError,
@@ -35,6 +36,8 @@ from portal_lib import (  # noqa: E402
     make_user_public,
     new_token,
     normalize_email,
+    open_private_binary_append,
+    open_private_append,
     parse_archive_name,
     seed_participation_profiles,
     participation_profiles_for_user,
@@ -212,9 +215,6 @@ def clean_text(value, limit=500):
 
 
 def client_ip():
-    forwarded = os.environ.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()[:64]
     return os.environ.get("REMOTE_ADDR", "")[:64]
 
 
@@ -242,6 +242,70 @@ def too_many_login_attempts(con, email):
         (normalize_email(email), client_ip()),
     ).fetchone()
     return int(row["c"] or 0) >= 10
+
+
+AUTH_RATE_WINDOW_MINUTES = 15
+REGISTRATION_MAX_FAILED_ATTEMPTS = 10
+PASSWORD_RESET_MAX_FAILED_ATTEMPTS = 5
+AUTH_IP_MAX_FAILED_ATTEMPTS = 30
+
+
+def record_auth_attempt(con, action, subject, success):
+    subject = normalize_email(subject)
+    ip = client_ip()
+    if success:
+        con.execute(
+            "DELETE FROM auth_attempts WHERE action = ? AND subject = ? AND ip = ? AND success = 0",
+            (action, subject, ip),
+        )
+    con.execute(
+        "INSERT INTO auth_attempts(action, subject, ip, success, attempted_at) VALUES (?, ?, ?, ?, ?)",
+        (action, subject, ip, 1 if success else 0, utcnow()),
+    )
+    con.execute(
+        "DELETE FROM auth_attempts WHERE attempted_at < datetime('now', '-1 day')"
+    )
+    con.commit()
+
+
+def too_many_auth_attempts(con, action, subject, limit):
+    row = con.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM auth_attempts
+        WHERE action = ? AND subject = ? AND ip = ?
+          AND success = 0
+          AND attempted_at >= datetime('now', ?)
+        """,
+        (
+            action,
+            normalize_email(subject),
+            client_ip(),
+            f"-{AUTH_RATE_WINDOW_MINUTES} minutes",
+        ),
+    ).fetchone()
+    return int(row["c"] or 0) >= limit
+
+
+def too_many_auth_ip_attempts(con, action, limit):
+    row = con.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM auth_attempts
+        WHERE action = ? AND ip = ?
+          AND success = 0
+          AND attempted_at >= datetime('now', ?)
+        """,
+        (action, client_ip(), f"-{AUTH_RATE_WINDOW_MINUTES} minutes"),
+    ).fetchone()
+    return int(row["c"] or 0) >= limit
+
+
+def enforce_auth_rate_limit(con, action, subject, subject_limit):
+    if too_many_auth_attempts(con, action, subject, subject_limit) or too_many_auth_ip_attempts(
+        con, action, AUTH_IP_MAX_FAILED_ATTEMPTS
+    ):
+        raise PortalError(429, "Too many attempts. Try again later.")
 
 
 def public_user(con, row):
@@ -280,13 +344,17 @@ def handle_register(con):
     registration_code = clean_text(payload.get("registration_code"), 120)
     if not email or not name or not institution or not password:
         raise PortalError(400, "Email, name, institution, and password are required.")
-    if registration_code != ensure_registration_code(con):
+    enforce_auth_rate_limit(con, "register", email, REGISTRATION_MAX_FAILED_ATTEMPTS)
+    if not secrets.compare_digest(registration_code, ensure_registration_code(con)):
+        record_auth_attempt(con, "register", email, False)
         raise PortalError(403, "Invalid registration code.")
     if len(password) < 10:
         raise PortalError(400, "Password must be at least 10 characters.")
     if not is_whitelisted(con, email):
+        record_auth_attempt(con, "register", email, False)
         raise PortalError(403, "This email is not on the RUMI modeler whitelist.")
     if con.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
+        record_auth_attempt(con, "register", email, False)
         raise PortalError(409, "An account already exists for this email.")
     salt, digest = hash_password(password)
     now = utcnow()
@@ -303,6 +371,7 @@ def handle_register(con):
     token, expires = create_session(con, row["id"])
     con.execute("UPDATE users SET last_login = ?, updated_at = ? WHERE id = ?", (now, now, row["id"]))
     con.commit()
+    record_auth_attempt(con, "register", email, True)
     row = con.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
     return {
         "payload": {
@@ -373,16 +442,20 @@ def handle_password_reset(con):
     new_password = payload.get("new_password") or ""
     if not email or not registration_code or not new_password:
         raise PortalError(400, "Email, initial invitation code, and new password are required.")
+    enforce_auth_rate_limit(con, "password_reset", email, PASSWORD_RESET_MAX_FAILED_ATTEMPTS)
     if len(new_password) < 10:
         raise PortalError(400, "New password must be at least 10 characters.")
     if not secrets.compare_digest(registration_code, ensure_registration_code(con)):
+        record_auth_attempt(con, "password_reset", email, False)
         raise PortalError(403, "Invalid initial invitation code.")
     if not is_whitelisted(con, email):
+        record_auth_attempt(con, "password_reset", email, False)
         raise PortalError(403, "This email is not on the RUMI modeler whitelist.")
     row = con.execute(
         "SELECT * FROM users WHERE email = ? AND status = 'approved'", (email,)
     ).fetchone()
     if not row:
+        record_auth_attempt(con, "password_reset", email, False)
         raise PortalError(404, "No approved RUMI account was found for this email.")
     salt, digest = hash_password(new_password)
     now = utcnow()
@@ -392,6 +465,7 @@ def handle_password_reset(con):
     )
     con.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))
     con.commit()
+    record_auth_attempt(con, "password_reset", email, True)
     return {"ok": True, "message": "Password reset complete. You can now sign in."}
 
 
@@ -651,7 +725,7 @@ def handle_upload_chunk(con):
     chunk = read_raw_body(MAX_CHUNK_BYTES)
     temp_path = Path(row["temp_path"])
     temp_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(temp_path, "ab") as handle:
+    with open_private_binary_append(temp_path) as handle:
         handle.write(chunk)
     received = expected + len(chunk)
     now = utcnow()
@@ -672,6 +746,14 @@ def queue_archive_validation(con, row):
     neither the response nor the child depends on the other surviving.
     """
     upload_id = row["upload_id"]
+    pending = con.execute(
+        "SELECT COUNT(*) AS c FROM uploads WHERE status IN ('queued', 'validating')"
+    ).fetchone()["c"]
+    if int(pending or 0) >= MAX_PENDING_VALIDATIONS:
+        raise PortalError(
+            429,
+            "The validation queue is temporarily full. Please try again later.",
+        )
     now = utcnow()
     con.execute(
         """
@@ -687,7 +769,7 @@ def queue_archive_validation(con, row):
     worker = BASE_DIR / "backend" / "validate_worker.py"
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(LOG_DIR / "worker.log", "a", encoding="utf-8") as log:
+        with open_private_append(LOG_DIR / "worker.log") as log:
             process = subprocess.Popen(
                 [sys.executable, str(worker), "--upload-id", upload_id],
                 stdin=subprocess.DEVNULL,

@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import tarfile
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 
@@ -97,6 +98,9 @@ MAX_CHUNK_BYTES = 8 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 3000
 MAX_ARCHIVE_NETCDF_FILES = 1500
 MAX_ARCHIVE_EXPANDED_BYTES = MAX_UPLOAD_BYTES
+MAX_MANIFEST_BYTES = 1 * 1024 * 1024
+MAX_COMMAND_OUTPUT_BYTES = 8 * 1024 * 1024
+MAX_PENDING_VALIDATIONS = 8
 REGISTRATION_CODE_KEY = "registration_code"
 
 INACTIVE_UPLOAD_STATUSES = (
@@ -156,6 +160,32 @@ def ensure_dirs():
         data_htaccess.write_text("Order allow,deny\nDeny from all\n", encoding="utf-8")
 
 
+def open_private_append(path):
+    """Open a runtime log or lock file with owner-only permissions."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "a", encoding="utf-8")
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def open_private_binary_append(path):
+    """Open a private binary append stream with owner-only permissions."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "ab")
+    except Exception:
+        os.close(fd)
+        raise
+
+
 def connect_db():
     ensure_dirs()
     con = sqlite3.connect(DB_PATH)
@@ -163,6 +193,10 @@ def connect_db():
     con.execute("PRAGMA busy_timeout = 5000")
     con.execute("PRAGMA foreign_keys = ON")
     init_schema(con)
+    try:
+        DB_PATH.chmod(0o600)
+    except OSError:
+        pass
     return con
 
 
@@ -266,6 +300,21 @@ def init_schema(con):
 
         CREATE INDEX IF NOT EXISTS idx_login_attempts_email_ip_time
             ON login_attempts(email, ip, attempted_at);
+
+        CREATE TABLE IF NOT EXISTS auth_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            attempted_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_auth_attempts_action_subject_ip_time
+            ON auth_attempts(action, subject, ip, attempted_at);
+
+        CREATE INDEX IF NOT EXISTS idx_auth_attempts_action_ip_time
+            ON auth_attempts(action, ip, attempted_at);
         """
     )
     upload_columns = {
@@ -616,17 +665,70 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def _read_process_output(stream, limit, result, key):
+    captured = bytearray()
+    overflow = False
+    while True:
+        chunk = stream.read(64 * 1024)
+        if not chunk:
+            break
+        remaining = limit - len(captured)
+        if remaining > 0:
+            captured.extend(chunk[:remaining])
+        if len(chunk) > max(remaining, 0):
+            overflow = True
+    result[key] = (bytes(captured), overflow)
+
+
 def run_command(args, timeout=60):
     env = os.environ.copy()
     env["PATH"] = "/home/lzhenn/array74/soft/anaconda3/bin:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH", "")
-    return subprocess.run(
+    process = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout,
         env=env,
-        check=False,
+    )
+    output = {}
+    readers = [
+        threading.Thread(
+            target=_read_process_output,
+            args=(process.stdout, MAX_COMMAND_OUTPUT_BYTES, output, "stdout"),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_read_process_output,
+            args=(process.stderr, MAX_COMMAND_OUTPUT_BYTES, output, "stderr"),
+            daemon=True,
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+
+    timed_out = False
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        process.wait()
+    for reader in readers:
+        reader.join()
+    process.stdout.close()
+    process.stderr.close()
+
+    stdout_bytes, stdout_overflow = output.get("stdout", (b"", False))
+    stderr_bytes, stderr_overflow = output.get("stderr", (b"", False))
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
+    if timed_out:
+        stderr += "\nCommand timed out."
+    if stdout_overflow or stderr_overflow:
+        stderr += "\nCommand output exceeded the validation limit."
+    return subprocess.CompletedProcess(
+        args,
+        1 if timed_out or stdout_overflow or stderr_overflow else process.returncode,
+        stdout=stdout_bytes.decode("utf-8", errors="replace"),
+        stderr=stderr,
     )
 
 
@@ -793,7 +895,12 @@ def validate_archive(path, filename, metadata, progress=None):
 
     def read_member(open_member, entry):
         with open_member(entry) as source:
-            return source.read()
+            data = source.read(MAX_MANIFEST_BYTES + 1)
+        if len(data) > MAX_MANIFEST_BYTES:
+            raise ValueError(
+                f"rumi_manifest.json exceeds the {MAX_MANIFEST_BYTES} byte limit."
+            )
+        return data
 
     def check_members(entries, open_member, archive_kind):
         names = [entry_name(entry) for entry in entries]
@@ -991,7 +1098,7 @@ def log_exception(exc, context=""):
     request_id = secrets.token_hex(6)
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(LOG_DIR / "api_errors.log", "a", encoding="utf-8") as handle:
+        with open_private_append(LOG_DIR / "api_errors.log") as handle:
             handle.write(
                 f"\n[{utcnow()}] request_id={request_id} context={context} "
                 f"type={type(exc).__name__}\n"
@@ -1151,7 +1258,7 @@ def reap_stale_validations(con, older_than_minutes=30):
     cutoff = (
         dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=older_than_minutes)
     ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    rows = con.execute(
+    candidates = con.execute(
         """
         SELECT * FROM uploads
         WHERE status IN ('queued', 'validating')
@@ -1159,7 +1266,18 @@ def reap_stale_validations(con, older_than_minutes=30):
         """,
         (cutoff,),
     ).fetchall()
+    rows = []
+    for row in candidates:
+        try:
+            worker_pid = int(row["worker_pid"] or 0)
+            if worker_pid:
+                os.kill(worker_pid, 0)
+                continue
+        except (OSError, TypeError, ValueError):
+            pass
+        rows.append(row)
     for row in rows:
+        remove_upload_files(row)
         validation = {
             "errors": [
                 "Validation stopped unexpectedly and no submission was accepted. "
@@ -1172,13 +1290,64 @@ def reap_stale_validations(con, older_than_minutes=30):
             """
             UPDATE uploads
             SET status = 'server_error', validation_json = ?, updated_at = ?,
-                worker_pid = NULL
+                worker_pid = NULL, temp_path = NULL
             WHERE upload_id = ?
             """,
             (json.dumps(validation, ensure_ascii=True), utcnow(), row["upload_id"]),
         )
     if rows:
         con.commit()
+    reap_stale_upload_files(con)
+    return len(rows)
+
+
+def reap_stale_upload_files(con, older_than_days=7):
+    """Remove abandoned receiving uploads and orphaned validation temp files."""
+    cutoff = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=older_than_days)
+    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    rows = con.execute(
+        """
+        SELECT * FROM uploads
+        WHERE status = 'receiving' AND updated_at < ?
+        """,
+        (cutoff,),
+    ).fetchall()
+    for row in rows:
+        remove_upload_files(row)
+        validation = {
+            "errors": [
+                "The upload was abandoned for too long and its temporary data "
+                "was removed. Please start the upload again."
+            ],
+            "warnings": [],
+            "summary": {},
+        }
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'failed', validation_json = ?, temp_path = NULL,
+                updated_at = ?
+            WHERE upload_id = ? AND status = 'receiving'
+            """,
+            (json.dumps(validation, ensure_ascii=True), utcnow(), row["upload_id"]),
+        )
+    if rows:
+        con.commit()
+
+    cutoff_timestamp = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=older_than_days)
+    ).timestamp()
+    try:
+        candidates = INCOMING_DIR.glob("rumi-validate-*.nc")
+        for path in candidates:
+            try:
+                if path.is_file() and path.stat().st_mtime < cutoff_timestamp:
+                    path.unlink()
+            except OSError:
+                continue
+    except OSError:
+        pass
     return len(rows)
 
 

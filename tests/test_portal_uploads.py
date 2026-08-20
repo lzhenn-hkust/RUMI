@@ -130,6 +130,24 @@ class UploadWorkflowTests(unittest.TestCase):
         )
         self.assertIsNone(session)
 
+    def test_password_reset_is_rate_limited(self):
+        portal_lib.import_whitelist(self.con, ["modeler@example.org"])
+        for _ in range(portal_api.PASSWORD_RESET_MAX_FAILED_ATTEMPTS):
+            portal_api.record_auth_attempt(
+                self.con, "password_reset", "modeler@example.org", False
+            )
+        payload = {
+            "email": "modeler@example.org",
+            "registration_code": "RUMI-INVITE",
+            "new_password": "new-password-123",
+        }
+
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_password_reset(self.con)
+
+        self.assertEqual(raised.exception.status, 429)
+
     def tearDown(self):
         self.con.close()
         self.patches.close()
@@ -387,6 +405,45 @@ class UploadWorkflowTests(unittest.TestCase):
         self.assertEqual(result["upload"]["file_kind"], "zip")
         self.assertEqual(result["upload"]["validation_done"], 0)
 
+    def test_validation_queue_has_a_global_pending_limit(self):
+        for index in range(portal_lib.MAX_PENDING_VALIDATIONS):
+            self.insert_upload(f"queued-{index}", "queued", file_kind="zip")
+        self.insert_upload(
+            "queue-limit-upload",
+            "receiving",
+            file_name="HKUST-MODEL-HRAIN2025-MODELER.zip",
+            file_kind="zip",
+        )
+
+        with mock.patch.object(
+            portal_api,
+            "read_json",
+            return_value={"upload_id": "queue-limit-upload"},
+        ):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_upload_finish(self.con)
+
+        self.assertEqual(raised.exception.status, 429)
+
+    def test_stale_receiving_upload_is_cleaned_up(self):
+        temp_path = self.insert_upload("stale-upload", "receiving")
+        self.con.execute(
+            "UPDATE uploads SET updated_at = '2020-01-01T00:00:00Z' WHERE upload_id = ?",
+            ("stale-upload",),
+        )
+        self.con.commit()
+
+        count = portal_lib.reap_stale_upload_files(self.con, older_than_days=7)
+        row = self.con.execute(
+            "SELECT status, temp_path FROM uploads WHERE upload_id = ?",
+            ("stale-upload",),
+        ).fetchone()
+
+        self.assertEqual(count, 1)
+        self.assertEqual(row["status"], "failed")
+        self.assertIsNone(row["temp_path"])
+        self.assertFalse(temp_path.exists())
+
     def test_finalization_error_becomes_terminal_server_error(self):
         self.insert_upload("blocked-upload", "receiving", content=b"valid")
         blocked_path = self.data_dir / "not-a-directory"
@@ -565,6 +622,69 @@ class NetcdfValidationTests(unittest.TestCase):
                         "event": "HRAIN2025",
                     },
                 )
+
+    def test_ncdump_output_is_bounded(self):
+        completed = portal_lib.run_command(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.write('x' * 9000000)",
+            ],
+            timeout=10,
+        )
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(
+            len(completed.stdout), portal_lib.MAX_COMMAND_OUTPUT_BYTES
+        )
+        self.assertIn("output exceeded", completed.stderr)
+
+    def test_manifest_read_is_bounded(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive_stem = "HKUST-WRF-HRAIN2025-LIU"
+            archive_path = Path(temp_dir) / f"{archive_stem}.zip"
+            member_name = (
+                f"{archive_stem}/GFS-FC/Init-5/"
+                "GFS-FC-WRF-HRAIN2025-20250806000000.nc"
+            )
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr(member_name, b"not-a-real-netcdf")
+                archive.writestr(
+                    f"{archive_stem}/Participant_Model_Documentation.pdf", "test"
+                )
+                archive.writestr(
+                    f"{archive_stem}/rumi_manifest.json",
+                    b"x" * (portal_lib.MAX_MANIFEST_BYTES + 1),
+                )
+
+            with mock.patch.object(
+                portal_lib,
+                "validate_netcdf",
+                return_value={
+                    "errors": [],
+                    "warnings": [],
+                    "summary": {
+                        "time_metadata": {
+                            "initialization_time": "2025-07-30T00:00:00Z",
+                            "forecast_initialization_time": "2025-07-30T00:00:00Z",
+                            "horizontal_resolution": "1 km",
+                        },
+                    },
+                },
+            ):
+                result = portal_lib.validate_archive(
+                    archive_path,
+                    archive_path.name,
+                    {
+                        "experiment": "GFS-FC",
+                        "model": "WRF",
+                        "event": "HRAIN2025",
+                    },
+                )
+
+        self.assertTrue(
+            any("exceeds the" in warning for warning in result["warnings"])
+        )
 
     def test_filename_parses_complete_experiment_and_model(self):
         parsed = portal_lib.parse_rumi_filename(
