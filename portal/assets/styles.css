@@ -794,7 +794,7 @@ table {
 }
 
 .users-table {
-  min-width: 980px;
+  min-width: 720px;
 }
 
 .users-table td[data-label="Role"] {
@@ -1080,6 +1080,10 @@ th {
   }
 
   .submissions-table {
+    min-width: 0;
+  }
+
+  .users-table {
     min-width: 0;
   }
 

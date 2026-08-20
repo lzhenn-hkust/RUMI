@@ -373,11 +373,7 @@ async function deleteUpload(uploadId) {
 
 function renderUsers(users) {
   const rows = users.map((user) => {
-    const actions = [];
-    if (user.status !== "approved") actions.push(`<button data-action="approve" data-id="${user.id}">Approve</button>`);
-    if (user.status !== "disabled") actions.push(`<button data-action="disable" data-id="${user.id}">Disable</button>`);
-    if (user.status !== "deleted") actions.push(`<button data-action="delete" data-id="${user.id}">Delete</button>`);
-    const roleSelect = `<select class="role-select" data-role="${user.id}" aria-label="Role for ${escapeHtml(user.email)}">
+    const roleSelect = `<select class="role-select" data-role="${user.id}" aria-label="Role for ${escapeHtml(user.name)}">
       <option value="modeler"${user.role === "modeler" ? " selected" : ""}>modeler</option>
       <option value="admin"${user.role === "admin" ? " selected" : ""}>admin</option>
     </select>`;
@@ -386,15 +382,12 @@ function renderUsers(users) {
     ).join("<br>") || '<span class="muted">Not linked</span>';
     return `<tr>
       <td data-label="Name">${escapeHtml(user.name)}</td>
-      <td data-label="Email">${escapeHtml(user.email)}</td>
       <td data-label="Institution">${escapeHtml(user.institution)}</td>
       <td data-label="Participation">${participation}</td>
       <td data-label="Role">${roleSelect}</td>
-      <td data-label="Status">${statusPill(user.status)}</td>
-      <td data-label="Actions"><div class="row-actions">${actions.join("")}</div></td>
     </tr>`;
   });
-  $("#usersBody").innerHTML = rows.join("") || `<tr><td colspan="7" class="muted">No users.</td></tr>`;
+  $("#usersBody").innerHTML = rows.join("") || `<tr><td colspan="4" class="muted">No users.</td></tr>`;
 }
 
 async function submitLogin(event) {
@@ -1192,17 +1185,8 @@ async function createUser(event) {
   }
 }
 
-async function updateUser(id, status = null, role = null) {
-  const payload = {id};
-  if (status) payload.status = status;
-  if (role) payload.role = role;
-  await api("admin_update_user", payload);
-  state.adminLoaded = false;
-  await loadAdmin();
-}
-
-async function deleteUser(id) {
-  await api("admin_delete_user", {id});
+async function updateUserRole(id, role) {
+  await api("admin_update_user", {id, role});
   state.adminLoaded = false;
   await loadAdmin();
 }
@@ -1304,21 +1288,6 @@ function bindEvents() {
   $("#createUserForm").addEventListener("submit", createUser);
   $("#whitelistForm").addEventListener("submit", addWhitelist);
   $("#passwordForm").addEventListener("submit", changePassword);
-  $("#usersBody").addEventListener("click", async (event) => {
-    const button = event.target.closest("button[data-action]");
-    if (!button) return;
-    try {
-      const id = Number(button.dataset.id);
-      if (button.dataset.action === "disable" && !window.confirm("Disable this user account?")) return;
-      if (button.dataset.action === "delete" && !window.confirm("Delete this user account? This cannot be undone in the portal.")) return;
-      if (button.dataset.action === "approve") await updateUser(id, "approved");
-      if (button.dataset.action === "disable") await updateUser(id, "disabled");
-      if (button.dataset.action === "delete") await deleteUser(id);
-      toast("User updated");
-    } catch (err) {
-      toast(err.message, "error");
-    }
-  });
   $("#usersBody").addEventListener("change", async (event) => {
     const select = event.target.closest("select[data-role]");
     if (!select) return;
@@ -1327,7 +1296,7 @@ function bindEvents() {
         await loadAdmin();
         return;
       }
-      await updateUser(Number(select.dataset.role), null, select.value);
+      await updateUserRole(Number(select.dataset.role), select.value);
       toast("Role updated");
     } catch (err) {
       toast(err.message, "error");
