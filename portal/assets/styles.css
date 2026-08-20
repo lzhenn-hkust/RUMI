@@ -132,6 +132,11 @@ main {
   margin-top: 18px;
 }
 
+.reset-panel {
+  grid-column: 1 / -1;
+  max-width: 760px;
+}
+
 .panel,
 .side-panel {
   background: rgba(255, 255, 255, .94);
@@ -284,6 +289,21 @@ form.panel,
   border-radius: 7px;
   padding: 0 14px;
   font-weight: 750;
+}
+
+.link-button {
+  justify-self: start;
+  padding: 0;
+  background: transparent;
+  color: var(--teal-dark);
+  font-size: .86rem;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.link-button:hover {
+  color: var(--teal);
 }
 
 .primary {

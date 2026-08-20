@@ -85,6 +85,51 @@ class UploadWorkflowTests(unittest.TestCase):
             )
         )
 
+    def test_password_reset_requires_the_initial_invitation_code(self):
+        portal_lib.import_whitelist(self.con, ["modeler@example.org"])
+        portal_lib.set_setting(self.con, "registration_code", "RUMI-INVITE")
+        payload = {
+            "email": "modeler@example.org",
+            "registration_code": "wrong-code",
+            "new_password": "new-password-123",
+        }
+
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_password_reset(self.con)
+
+        self.assertEqual(raised.exception.status, 403)
+        self.assertEqual(raised.exception.message, "Invalid initial invitation code.")
+
+    def test_password_reset_updates_password_and_invalidates_sessions(self):
+        portal_lib.import_whitelist(self.con, ["modeler@example.org"])
+        portal_lib.set_setting(self.con, "registration_code", "RUMI-INVITE")
+        session_token, _ = portal_lib.create_session(self.con, 1)
+        payload = {
+            "email": "modeler@example.org",
+            "registration_code": "RUMI-INVITE",
+            "new_password": "new-password-123",
+        }
+
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            result = portal_api.handle_password_reset(self.con)
+
+        row = self.con.execute(
+            "SELECT password_salt, password_hash FROM users WHERE id = 1"
+        ).fetchone()
+        session = self.con.execute(
+            "SELECT 1 FROM sessions WHERE token_hash = ?",
+            (portal_lib.token_hash(session_token),),
+        ).fetchone()
+        self.assertTrue(result["ok"])
+        self.assertIn("Password reset complete", result["message"])
+        self.assertTrue(
+            portal_lib.verify_password(
+                "new-password-123", row["password_salt"], row["password_hash"]
+            )
+        )
+        self.assertIsNone(session)
+
     def tearDown(self):
         self.con.close()
         self.patches.close()

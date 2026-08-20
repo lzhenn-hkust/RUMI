@@ -182,7 +182,7 @@ def require_portal_header():
         raise PortalError(403, "Missing portal request header.")
     session_token = request_cookie("rumi_session")
     action = query_one("action")
-    if method in ("POST", "PUT", "DELETE") and session_token and action not in ("login", "register"):
+    if method in ("POST", "PUT", "DELETE") and session_token and action not in ("login", "register", "password_reset"):
         expected = csrf_value(session_token)
         provided = os.environ.get("HTTP_X_CSRF_TOKEN", "")
         if not provided or not secrets.compare_digest(provided, expected):
@@ -364,6 +364,35 @@ def handle_change_password(con):
     )
     con.commit()
     return {"ok": True}
+
+
+def handle_password_reset(con):
+    payload = read_json()
+    email = normalize_email(payload.get("email"))
+    registration_code = clean_text(payload.get("registration_code"), 120)
+    new_password = payload.get("new_password") or ""
+    if not email or not registration_code or not new_password:
+        raise PortalError(400, "Email, initial invitation code, and new password are required.")
+    if len(new_password) < 10:
+        raise PortalError(400, "New password must be at least 10 characters.")
+    if not secrets.compare_digest(registration_code, ensure_registration_code(con)):
+        raise PortalError(403, "Invalid initial invitation code.")
+    if not is_whitelisted(con, email):
+        raise PortalError(403, "This email is not on the RUMI modeler whitelist.")
+    row = con.execute(
+        "SELECT * FROM users WHERE email = ? AND status = 'approved'", (email,)
+    ).fetchone()
+    if not row:
+        raise PortalError(404, "No approved RUMI account was found for this email.")
+    salt, digest = hash_password(new_password)
+    now = utcnow()
+    con.execute(
+        "UPDATE users SET password_salt = ?, password_hash = ?, updated_at = ? WHERE id = ?",
+        (salt, digest, now, row["id"]),
+    )
+    con.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))
+    con.commit()
+    return {"ok": True, "message": "Password reset complete. You can now sign in."}
 
 
 def handle_admin_users(con):
@@ -841,6 +870,7 @@ ROUTES = {
     "login": handle_login,
     "logout": handle_logout,
     "change_password": handle_change_password,
+    "password_reset": handle_password_reset,
     "admin_users": handle_admin_users,
     "admin_create_user": handle_admin_create_user,
     "admin_update_user": handle_admin_update_user,

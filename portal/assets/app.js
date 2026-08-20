@@ -41,6 +41,23 @@ function formMessage(id, message = "", type = "ok") {
   el.classList.toggle("hidden", !message);
 }
 
+function showPasswordReset() {
+  const panel = $("#passwordResetPanel");
+  const loginEmail = $("#loginForm input[name='email']").value.trim();
+  panel.classList.remove("hidden");
+  const emailInput = $("#passwordResetForm input[name='email']");
+  if (loginEmail && !emailInput.value) emailInput.value = loginEmail;
+  window.setTimeout(() => emailInput.focus(), 0);
+}
+
+function hidePasswordReset() {
+  const panel = $("#passwordResetPanel");
+  if (!panel) return;
+  panel.classList.add("hidden");
+  $("#passwordResetForm").reset();
+  formMessage("#resetMessage");
+}
+
 function cookieValue(name) {
   return document.cookie
     .split(";")
@@ -1217,9 +1234,35 @@ async function changePassword(event) {
   }
 }
 
+async function submitPasswordReset(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = formDataObject(form);
+  if (values.new_password !== values.confirm_password) {
+    formMessage("#resetMessage", "New passwords do not match.", "error");
+    return;
+  }
+  delete values.confirm_password;
+  formMessage("#resetMessage");
+  try {
+    const data = await api("password_reset", values);
+    hidePasswordReset();
+    $("#loginForm input[name='email']").value = values.email;
+    formMessage("#loginMessage", data.message || "Password reset complete");
+    toast(data.message || "Password reset complete");
+  } catch (err) {
+    formMessage("#resetMessage", err.message, "error");
+    toast(err.message, "error");
+  }
+}
+
 function bindEvents() {
   $("#loginForm").addEventListener("submit", submitLogin);
   $("#registerForm").addEventListener("submit", submitRegister);
+  $("#forgotPasswordBtn").addEventListener("click", showPasswordReset);
+  $("#closeResetBtn").addEventListener("click", hidePasswordReset);
+  $("#cancelResetBtn").addEventListener("click", hidePasswordReset);
+  $("#passwordResetForm").addEventListener("submit", submitPasswordReset);
   $("#logoutBtn").addEventListener("click", logout);
   $$(".tab").forEach((tab) => tab.addEventListener("click", () => activateTab(tab.dataset.tab)));
   $("#uploadForm").addEventListener("submit", submitUpload);
