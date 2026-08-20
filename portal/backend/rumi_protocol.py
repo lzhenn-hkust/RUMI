@@ -1,5 +1,5 @@
 # --- BEGIN INLINE ---
-"""Shared RUMI submission protocol rules (v3).
+"""Shared RUMI submission protocol rules (v3.1).
 
 This module is the single source of truth for the RUMI event calendar,
 required submission time coverage, initialization-time labels, experiment
@@ -327,7 +327,7 @@ RUMI_FILENAME_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Archive / directory naming (v3 submission structure).
+# Archive / directory naming (v3.1 submission structure).
 # ---------------------------------------------------------------------------
 # Tokens use [A-Z0-9]+ (uppercase letters and digits only): a hyphen is a
 # field separator, so it cannot appear inside a token (e.g. "WRF-ARW" must
@@ -368,7 +368,7 @@ def iso_z(moment: dt.datetime) -> str:
 
 
 def parse_archive_name(name: str) -> Optional[Dict[str, str]]:
-    """Parse a v3 archive file name.
+    """Parse a v3.1 archive file name.
 
     Expected form:
     ``<INST>-<MODEL>-<EVENT>-<POC>.(tar.gz|zip)``
@@ -702,7 +702,7 @@ def validate_archive_structure(names, filename):
         parsed_name = parse_rumi_filename(member_name)
         if not parsed_name:
             errors.add(
-                "File name must follow <experiment>-<Model>-<Event>-"
+                "File name must follow <FORCING>-<MODE>-<MODEL>-<EVENT>-"
                 "<YYYYMMDDHHMMSS>[_member][_rNN].nc.",
                 name,
             )
@@ -1024,7 +1024,7 @@ def validate_netcdf_facts(filename, facts, metadata=None):
     parsed = parse_rumi_filename(filename)
     if not parsed:
         errors.append(
-            "File name must follow <experiment>-<Model>-<Event>-"
+            "File name must follow <FORCING>-<MODE>-<MODEL>-<EVENT>-"
             "<YYYYMMDDHHMMSS>[_member][_rNN].nc, for example "
             "ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc."
         )

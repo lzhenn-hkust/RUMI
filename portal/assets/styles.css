@@ -339,16 +339,58 @@ form.panel,
   gap: 16px;
 }
 
+.upload-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 2px 2px 0;
+}
+
+.upload-heading h2 {
+  font-size: 1.28rem;
+  line-height: 1.2;
+}
+
+.section-kicker,
+.dropzone-eyebrow {
+  margin-bottom: 5px;
+  color: var(--teal-dark);
+  font-size: .72rem;
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.format-badge {
+  border: 1px solid #cfe1df;
+  border-radius: 6px;
+  padding: 7px 9px;
+  background: #eaf5f3;
+  color: var(--teal-dark);
+  font-size: .72rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
 .dropzone {
   position: relative;
   display: flex;
-  gap: 14px;
+  justify-content: space-between;
+  gap: 20px;
   align-items: center;
-  min-height: 108px;
-  padding: 18px;
+  min-height: 132px;
+  padding: 22px;
   border: 1px dashed #98b7b2;
   border-radius: 8px;
   background: #f8fbfb;
+  transition: border-color .16s ease, background-color .16s ease, box-shadow .16s ease;
+}
+
+.dropzone:hover {
+  border-color: var(--teal);
+  background: #f4fbfa;
+  box-shadow: 0 8px 20px rgba(15, 47, 58, .06);
 }
 
 .dropzone.dragging {
@@ -356,16 +398,68 @@ form.panel,
   background: #edf8f6;
 }
 
-.dropzone input {
-  max-width: 340px;
-  background: #fff;
+.dropzone-copy {
+  min-width: 0;
 }
 
-.dropzone span {
+.dropzone-copy > strong,
+.dropzone-copy > span {
   display: block;
-  margin-top: 3px;
+}
+
+.dropzone-copy > strong {
+  font-size: 1.04rem;
+}
+
+.dropzone-copy > span:not(.dropzone-eyebrow) {
+  margin-top: 5px;
   color: var(--muted);
   font-size: .9rem;
+  line-height: 1.5;
+}
+
+.dropzone-action {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.file-picker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border-radius: 7px;
+  padding: 0 15px;
+  background: var(--teal);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.file-picker:hover {
+  background: var(--teal-dark);
+}
+
+.file-selection {
+  max-width: 220px;
+  color: var(--muted);
+  font-size: .78rem;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
 }
 
 .resume-hint {
@@ -393,17 +487,6 @@ form.panel,
 
 .resume-hint button:hover {
   background: var(--teal-dark);
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.single-file-fields {
-  display: grid;
-  gap: 16px;
 }
 
 .identity-grid {
@@ -480,23 +563,6 @@ form.panel,
   max-width: 560px;
 }
 
-.details {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfdfc;
-  padding: 12px;
-}
-
-.details summary {
-  cursor: pointer;
-  font-weight: 800;
-  color: #263a42;
-}
-
-.details .form-grid {
-  margin-top: 14px;
-}
-
 .actions {
   display: flex;
   gap: 10px;
@@ -534,13 +600,28 @@ form.panel,
 }
 
 .download {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 10px 11px;
   background: #fbfdfc;
   text-decoration: none;
   font-weight: 750;
+}
+
+.download::after {
+  content: "Download";
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 650;
+}
+
+.download:hover {
+  border-color: #a9c9c4;
+  background: #f1f8f6;
 }
 
 .archive-layout {
@@ -869,10 +950,6 @@ th {
     grid-template-columns: 1fr;
   }
 
-  .form-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .side-panel {
     position: static;
     order: -1;
@@ -927,7 +1004,6 @@ th {
     min-width: 0;
   }
 
-  .form-grid,
   .inline-form {
     grid-template-columns: 1fr;
   }
@@ -960,6 +1036,22 @@ th {
   .dropzone {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .upload-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .dropzone-action {
+    justify-items: start;
+    width: 100%;
+  }
+
+  .file-selection {
+    max-width: none;
+    text-align: left;
   }
 
   table,

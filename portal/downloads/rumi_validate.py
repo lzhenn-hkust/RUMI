@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""RUMI v3 submission local validator.
+"""RUMI v3.1 submission local validator.
 
 *** THIS FILE IS AUTO-GENERATED. DO NOT EDIT IT BY HAND. ***
 
-It is built by ``tools/build_validator.py`` from the single source of truth
-for the validation rules, ``portal/backend/rumi_protocol.py`` (the block
-between that file's ``# --- BEGIN INLINE ---`` / ``# --- END INLINE ---``
-markers is inlined verbatim below, unchanged). To change any validation
-rule, edit ``rumi_protocol.py`` and regenerate this file with::
-
-    python3 tools/build_validator.py
-
-then commit the regenerated file alongside the rule change.
+Its validation rules are copied from the single source of truth,
+``portal/backend/rumi_protocol.py``. The block between that file's
+``# --- BEGIN INLINE ---`` / ``# --- END INLINE ---`` markers is inlined
+verbatim below, unchanged. Keep this downloaded copy synchronized with the
+portal whenever a protocol rule changes.
 
 This script is downloaded and run standalone by RUMI participants on their
 own machines, so it depends only on the Python standard library plus one
@@ -56,11 +52,10 @@ except Exception:  # pragma: no cover - exercised only without the package
 
 # ============================================================================
 # BEGIN inlined portal/backend/rumi_protocol.py rules (verbatim).
-# Do not edit this block by hand -- edit rumi_protocol.py and rerun
-# tools/build_validator.py.
+# Do not edit this block by hand -- edit rumi_protocol.py and regenerate the
+# downloaded validator from that source.
 # ============================================================================
-
-"""Shared RUMI submission protocol rules (v3).
+"""Shared RUMI submission protocol rules (v3.1).
 
 This module is the single source of truth for the RUMI event calendar,
 required submission time coverage, initialization-time labels, experiment
@@ -388,7 +383,7 @@ RUMI_FILENAME_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Archive / directory naming (v3 submission structure).
+# Archive / directory naming (v3.1 submission structure).
 # ---------------------------------------------------------------------------
 # Tokens use [A-Z0-9]+ (uppercase letters and digits only): a hyphen is a
 # field separator, so it cannot appear inside a token (e.g. "WRF-ARW" must
@@ -429,7 +424,7 @@ def iso_z(moment: dt.datetime) -> str:
 
 
 def parse_archive_name(name: str) -> Optional[Dict[str, str]]:
-    """Parse a v3 archive file name.
+    """Parse a v3.1 archive file name.
 
     Expected form:
     ``<INST>-<MODEL>-<EVENT>-<POC>.(tar.gz|zip)``
@@ -763,7 +758,7 @@ def validate_archive_structure(names, filename):
         parsed_name = parse_rumi_filename(member_name)
         if not parsed_name:
             errors.add(
-                "File name must follow <experiment>-<Model>-<Event>-"
+                "File name must follow <FORCING>-<MODE>-<MODEL>-<EVENT>-"
                 "<YYYYMMDDHHMMSS>[_member][_rNN].nc.",
                 name,
             )
@@ -1085,7 +1080,7 @@ def validate_netcdf_facts(filename, facts, metadata=None):
     parsed = parse_rumi_filename(filename)
     if not parsed:
         errors.append(
-            "File name must follow <experiment>-<Model>-<Event>-"
+            "File name must follow <FORCING>-<MODE>-<MODEL>-<EVENT>-"
             "<YYYYMMDDHHMMSS>[_member][_rNN].nc, for example "
             "ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc."
         )
@@ -1232,7 +1227,7 @@ def validate_netcdf_facts(filename, facts, metadata=None):
 
     return {"errors": errors, "warnings": warnings, "summary": summary}
 
-# ============================================================================
+
 # END inlined rules
 # ============================================================================
 
@@ -1243,7 +1238,7 @@ def validate_netcdf_facts(filename, facts, metadata=None):
 # section never decides on its own whether a submission is valid.
 # ---------------------------------------------------------------------------
 
-VALIDATOR_VERSION = "1.0.0"
+VALIDATOR_VERSION = "1.1.0"
 
 MANIFEST_NAME = "rumi_manifest.json"
 PROGRESS_INTERVAL = 25
@@ -1805,7 +1800,7 @@ def _build_parser():
     parser = argparse.ArgumentParser(
         prog="rumi_validate.py",
         description=(
-            "Validate a RUMI v3 submission (an extracted directory, or a "
+            "Validate a RUMI v3.1 submission (an extracted directory, or a "
             ".tar.gz/.zip archive) against the same rules the portal "
             "uses, so problems can be found and fixed before uploading."
         ),

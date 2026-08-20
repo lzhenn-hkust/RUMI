@@ -511,6 +511,7 @@ function renderArchiveIdentity(parsed) {
 function setUploadMode(file) {
   const archive = isArchiveFile(file);
   $("#archiveIdentity").classList.toggle("hidden", !archive);
+  $("#fileSelection").textContent = file?.name || "No archive selected";
   $("#fileModeHint").textContent =
     "Upload a .zip or .tar.gz structured archive containing the required NetCDF files and Participant_Model_Documentation.pdf.";
   if (archive) {
@@ -811,9 +812,8 @@ class UploadPausedError extends Error {
   }
 }
 
-async function startUpload(metadata, file, replaceUploadId = "") {
+async function startUpload(file, replaceUploadId = "") {
   return api("upload_start", {
-    ...metadata,
     file_name: file.name,
     file_size: file.size,
     replace_upload_id: replaceUploadId,
@@ -1109,7 +1109,6 @@ async function resumeUploadFromRecord() {
 
 async function submitUpload(event) {
   event.preventDefault();
-  const form = event.currentTarget;
   const file = $("#fileInput").files[0];
   if (!file) {
     toast("Select a file first", "error");
@@ -1120,13 +1119,11 @@ async function submitUpload(event) {
   setProgress(0, file.size, "Preparing");
   await withUploadButtonDisabled(async () => {
     try {
-      const metadata = formDataObject(form);
-      delete metadata.file;
       let uploadId;
       let chunkSize = (state.constants && state.constants.chunk_size) || (8 * 1024 * 1024);
       let startOffset = 0;
       try {
-        const start = await startUpload(metadata, file);
+        const start = await startUpload(file);
         uploadId = start.upload_id;
         chunkSize = start.chunk_size || chunkSize;
       } catch (err) {
@@ -1152,7 +1149,7 @@ async function submitUpload(event) {
             setProgress(0, file.size, "Cancelled");
             return;
           }
-          const start = await startUpload(metadata, file, existing.upload_id);
+          const start = await startUpload(file, existing.upload_id);
           uploadId = start.upload_id;
           chunkSize = start.chunk_size || chunkSize;
         } else {
@@ -1270,7 +1267,8 @@ function bindEvents() {
   const dropzone = $(".dropzone");
   const fileInput = $("#fileInput");
   dropzone.addEventListener("click", (event) => {
-    if (event.target !== fileInput) fileInput.click();
+    if (event.target === fileInput || event.target.closest("label[for='fileInput']")) return;
+    fileInput.click();
   });
   ["dragenter", "dragover"].forEach((name) => dropzone.addEventListener(name, (event) => {
     event.preventDefault();

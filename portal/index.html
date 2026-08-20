@@ -89,11 +89,23 @@
       <section id="uploadTab" class="tab-panel">
         <form id="uploadForm" class="workspace">
           <div class="upload-main">
-            <div class="dropzone">
-              <input id="fileInput" name="file" type="file" accept=".zip,.tar.gz" required>
+            <div class="upload-heading">
               <div>
+                <p class="section-kicker">Submission intake</p>
+                <h2>Upload archive</h2>
+              </div>
+              <span class="format-badge">ZIP or TAR.GZ</span>
+            </div>
+            <div class="dropzone">
+              <input id="fileInput" class="visually-hidden" name="file" type="file" accept=".zip,.tar.gz" aria-describedby="fileModeHint fileSelection" required>
+              <div class="dropzone-copy">
+                <span class="dropzone-eyebrow">Structured archive</span>
                 <strong>Select submission archive</strong>
-                <span id="fileModeHint">Upload a .zip or .tar.gz structured archive containing the required NetCDF files and Participant_Model_Documentation.pdf.</span>
+                <span id="fileModeHint">.zip or .tar.gz containing the required NetCDF files and Participant_Model_Documentation.pdf.</span>
+              </div>
+              <div class="dropzone-action">
+                <label class="file-picker" for="fileInput">Browse files</label>
+                <span id="fileSelection" class="file-selection">No archive selected</span>
               </div>
             </div>
             <div id="resumeHint" class="resume-hint hidden"></div>
@@ -135,7 +147,7 @@
           </div>
 
           <aside class="side-panel">
-            <h3>Required (9)</h3>
+            <h3>Core variables (9)</h3>
             <ul id="coreVarList" class="token-list"></ul>
             <h3>Recommended radiation</h3>
             <p class="muted" id="radiationVarNote"></p>
@@ -254,7 +266,7 @@
               <dt>Coordinates</dt><dd>lat: 22.12 to 22.57805556; lon: 113.82 to 114.44780556</dd>
               <dt>Frequency</dt><dd>hourly minimum, one time snapshot per file</dd>
               <dt>Format</dt><dd>NetCDF4, CF-1.8, _FillValue = -9999.0</dd>
-              <dt>Name</dt><dd>&lt;experiment&gt;-&lt;Model&gt;-&lt;Event&gt;-&lt;YYYYMMDDHHMMSS&gt;.nc</dd>
+              <dt>NetCDF members</dt><dd>&lt;FORCING&gt;-&lt;MODE&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;YYYYMMDDHHMMSS&gt;[_member][_rNN].nc</dd>
               <dt>Archives</dt><dd>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;.tar.gz or .zip, containing a top directory of the same name with Participant_Model_Documentation.pdf and ERA5-AN|GFS-FC/Init-*/*.nc</dd>
               <dt>3D fields (recommended)</dt><dd id="format3dFields">—</dd>
               <dt>Rules version</dt><dd id="rulesVersion">—</dd>
@@ -266,6 +278,6 @@
   </main>
 
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="assets/app.js?v=20260820-archive-v2"></script>
+  <script src="assets/app.js?v=20260820-archive-v3-1"></script>
 </body>
 </html>

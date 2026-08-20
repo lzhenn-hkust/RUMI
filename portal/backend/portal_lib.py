@@ -322,7 +322,7 @@ UPLOAD_COLUMN_ADDITIONS = (
     # Which rule set accepted the submission, so a later protocol change is
     # traceable per upload rather than only per deployment.
     ("rules_version", "TEXT"),
-    # Configuration identity parsed from the v3 archive name.
+    # Archive POC plus legacy configuration columns retained for old records.
     ("poc", "TEXT"),
     ("config_id", "TEXT"),
     ("archive_version", "TEXT"),
@@ -762,7 +762,7 @@ def validate_netcdf(path, filename, metadata):
 
 
 def validate_archive(path, filename, metadata, progress=None):
-    """Validate a structured RUMI v3 submission archive.
+    """Validate a structured RUMI v3.1 submission archive.
 
     Structure is checked first from member paths alone, so naming and layout
     mistakes are reported in milliseconds. Per-file NetCDF checks only run once
@@ -1005,7 +1005,7 @@ def log_exception(exc, context=""):
 def storage_directory(row):
     """Where an accepted submission is filed.
 
-    A v3 archive spans several experiments, so it is filed by event and model.
+    A v3.1 archive spans several experiments, so it is filed by event and model.
     Single NetCDF files keep the original four-level path so existing
     submissions stay where the database says they are.
     """

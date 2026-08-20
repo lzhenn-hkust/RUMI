@@ -21,14 +21,12 @@ Usage:
       3. Run the script
 
 Changelog:
-  v2.1 (2026-07-29): Updated the core grid to 9.7 arc-seconds (234 x 171)
-                      and added analysis/forecast experiment tags.
-  v2.0 (2026-03-30): Complete rewrite for RUMI protocol. 2D gridded output
-                      on standard 15 arc-sec lat/lon grid. Single-frame files.
+  v3.1 (2026-08-20): Aligned the example member filename and metadata with
+                      the structured-archive submission protocol.
 '''
 
 __title__   = 'RUMI NetCDF creation script'
-__version__ = 'v2.1 (2026-07-29)'
+__version__ = 'v3.1 (2026-08-20)'
 __author__  = 'Zhenning LI'
 
 import numpy as np
@@ -137,7 +135,7 @@ def set_info():
     '''Set experiment metadata. Update this for your simulation.'''
     info = {
         # Experiment identification
-        'experiment':       'RUMI-ERA5-AN',
+        'experiment':       'ERA5-AN',
         'event':            'MANGKHUT2018',
         'event_name':       'Typhoon Mangkhut (2018)',
         'model':            'WRF',
@@ -342,7 +340,7 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
         ds.source       = f"{info['model']}"
         ds.history      = (f"Created {info['creation_date']} with "
                            f"{__title__} {__version__}")
-        ds.references   = 'RUMI Protocol v1.2 (2026)'
+        ds.references   = 'RUMI Phase 1 protocol v3.1 (2026)'
         ds.comment      = 'Example output file; replace with actual model data'
 
         # RUMI-specific

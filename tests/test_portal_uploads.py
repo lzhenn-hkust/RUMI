@@ -36,12 +36,8 @@ class UploadWorkflowTests(unittest.TestCase):
         self.submissions_dir.mkdir()
 
         self.patches = ExitStack()
-        self.patches.enter_context(mock.patch.object(portal_api, "DATA_DIR", self.data_dir))
         self.patches.enter_context(
             mock.patch.object(portal_api, "INCOMING_DIR", self.incoming_dir)
-        )
-        self.patches.enter_context(
-            mock.patch.object(portal_api, "SUBMISSIONS_DIR", self.submissions_dir)
         )
         self.patches.enter_context(
             mock.patch.object(portal_api, "LOG_DIR", self.data_dir / "logs")
@@ -215,8 +211,10 @@ class UploadWorkflowTests(unittest.TestCase):
         ).fetchone()
         metadata = json.loads(row["metadata_json"])
         self.assertEqual(row["file_kind"], "zip")
-        self.assertEqual(metadata["simulation_start_time"], "")
-        self.assertEqual(metadata["forecast_lead_time_hours"], "")
+        self.assertEqual(
+            metadata,
+            {"event": "HRAIN2025", "model": "MODEL", "experiment": "(archive)"},
+        )
 
         self.assertEqual(row["institution"], "HKUST")
 

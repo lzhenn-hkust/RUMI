@@ -14,13 +14,11 @@ sys.path.insert(0, str(BASE_DIR / "backend"))
 
 from portal_lib import (  # noqa: E402
     ACCEPTED_UPLOAD_STATUSES,
-    DATA_DIR,
     INACTIVE_UPLOAD_STATUSES,
     INCOMING_DIR,
     LOG_DIR,
     MAX_CHUNK_BYTES,
     MAX_UPLOAD_BYTES,
-    SUBMISSIONS_DIR,
     USER_STORAGE_QUOTA_BYTES,
     PortalError,
     constants_payload,
@@ -34,18 +32,15 @@ from portal_lib import (  # noqa: E402
     import_whitelist,
     is_whitelisted,
     last_admin_guard,
-    load_whitelist_file,
     make_user_public,
     new_token,
     normalize_email,
     parse_archive_name,
-    parse_rumi_filename,
     seed_participation_profiles,
     participation_profiles_for_user,
     require_role,
     safe_file_name,
     sha256_file,
-    slugify,
     upload_record_public,
     user_storage_bytes,
     utcnow,
@@ -54,7 +49,6 @@ from portal_lib import (  # noqa: E402
     log_exception,
     reap_stale_validations,
     remove_upload_files,
-    storage_directory,
     verify_password,
     hash_password,
 )
@@ -250,43 +244,6 @@ def too_many_login_attempts(con, email):
     return int(row["c"] or 0) >= 10
 
 
-def metadata_from_payload(payload):
-    fields = [
-        "experiment",
-        "model",
-        "event",
-        "member",
-        "version",
-        "forcing_mode",
-        "forcing_source",
-        "forcing_data",
-        "forcing_data_version",
-        "forcing_resolution",
-        "forcing_update_interval",
-        "simulation_start_time",
-        "initialization_time",
-        "forecast_initialization_time",
-        "forecast_lead_time_hours",
-        "horizontal_resolution",
-        "vertical_levels",
-        "model_top_pressure",
-        "microphysics_scheme",
-        "cumulus_scheme",
-        "pbl_scheme",
-        "radiation_scheme",
-        "land_surface_scheme",
-        "urban_scheme",
-        "surface_layer_scheme",
-        "turbulence_closure",
-        "landuse_dataset",
-        "urban_morphology_source",
-        "terrain_dataset",
-        "soil_dataset",
-        "technical_notes",
-    ]
-    return {field: clean_text(payload.get(field, ""), 3000 if field == "technical_notes" else 500) for field in fields}
-
-
 def public_user(con, row):
     user = make_user_public(row)
     if user:
@@ -407,29 +364,6 @@ def handle_change_password(con):
     )
     con.commit()
     return {"ok": True}
-
-
-def handle_update_profile(con):
-    user = require_approved_user(con)
-    payload = read_json()
-    name = clean_text(payload.get("name", user["name"]), 120)
-    institution = clean_text(payload.get("institution", user["institution"]), 200)
-    poc_surname = clean_text(payload.get("poc_surname", ""), 80)
-    participants = clean_text(payload.get("participants", ""), 1000)
-    if not name or not institution:
-        raise PortalError(400, "Name and institution are required.")
-    con.execute(
-        """
-        UPDATE users
-        SET name = ?, institution = ?, poc_surname = ?, participants = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (name, institution, poc_surname, participants, utcnow(), user["id"]),
-    )
-    con.commit()
-    row = con.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
-    return {"ok": True, "user": public_user(con, row)}
 
 
 def handle_admin_users(con):
@@ -554,7 +488,6 @@ def handle_upload_start(con):
             "containing Participant_Model_Documentation.pdf and the NetCDF files.",
             {"code": "archive_only"},
         )
-    metadata = metadata_from_payload(payload)
     requested_replacement = clean_text(payload.get("replace_upload_id"), 80)
     registered_profiles = participation_profiles_for_user(con, user["id"])
     participants = clean_text(user.get("participants") or "", 1000)
@@ -577,14 +510,14 @@ def handle_upload_start(con):
             "WRF-ARW is written WRFARW.",
             {"code": "archive_name"},
         )
-    metadata["event"] = archive["event"]
-    metadata["model"] = archive["model"]
-    metadata["experiment"] = "(archive)"
+    metadata = {
+        "event": archive["event"],
+        "model": archive["model"],
+        "experiment": "(archive)",
+    }
 
-    if metadata["event"] not in constants_payload()["events"]:
-        raise PortalError(400, "Select a valid RUMI event.")
-    if not metadata["experiment"] or not metadata["model"]:
-        raise PortalError(400, "Experiment and model are required.")
+    if archive["event"] not in constants_payload()["events"]:
+        raise PortalError(400, "The archive name contains an unsupported RUMI event.")
     timestamp_utc = None
     inactive_placeholders = ", ".join("?" for _ in INACTIVE_UPLOAD_STATUSES)
     existing = con.execute(
@@ -652,14 +585,14 @@ def handle_upload_start(con):
             metadata["model"],
             metadata["event"],
             timestamp_utc,
-            metadata["member"],
-            metadata["version"],
+            "",
+            "",
             json.dumps(metadata, ensure_ascii=True),
             str(temp_path),
             existing["upload_id"] if existing else None,
-            archive["poc"] if archive else (user.get("poc_surname") or ""),
-            archive["config"] if archive else "",
-            archive["version"] if archive else "",
+            archive["poc"],
+            archive["config"],
+            archive["version"],
             participants,
             now,
             now,
@@ -790,7 +723,8 @@ def handle_upload_finish(con):
     if row["file_kind"] in ("zip", "tar"):
         return queue_archive_validation(con, row)
 
-    # A single NetCDF file takes a fraction of a second, so it stays inline.
+    # Keep historical single-NetCDF records readable while new uploads use the
+    # structured-archive worker above.
     metadata = json.loads(row["metadata_json"])
     now = utcnow()
     con.execute(
@@ -884,15 +818,6 @@ def handle_upload_delete(con):
     return {"ok": True}
 
 
-def handle_bootstrap_info(con):
-    require_admin(con)
-    admins = con.execute(
-        "SELECT COUNT(*) AS c FROM users WHERE role = 'admin' AND status = 'approved'"
-    ).fetchone()["c"]
-    whitelist = con.execute("SELECT COUNT(*) AS c FROM whitelist").fetchone()["c"]
-    return {"ok": True, "admins": admins, "whitelist": whitelist}
-
-
 def handle_download(con):
     allowed = {
         "RUMI_template_2d.nc": ("downloads/RUMI_template_2d.nc", "application/octet-stream"),
@@ -916,7 +841,6 @@ ROUTES = {
     "login": handle_login,
     "logout": handle_logout,
     "change_password": handle_change_password,
-    "update_profile": handle_update_profile,
     "admin_users": handle_admin_users,
     "admin_create_user": handle_admin_create_user,
     "admin_update_user": handle_admin_update_user,
@@ -929,7 +853,6 @@ ROUTES = {
     "upload_status": handle_upload_status,
     "uploads": handle_uploads,
     "upload_delete": handle_upload_delete,
-    "bootstrap_info": handle_bootstrap_info,
     "download": handle_download,
 }
 

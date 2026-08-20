@@ -70,23 +70,23 @@ Additional 2D and 3D fields are defined in `create_ncdf.py`.
 - Compression: zlib
 - Missing value: `-9999.0`
 
-### Filename
+### NetCDF Member Filename
 
 ```text
-<RUMI experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_<member>][_vNN].nc
+<FORCING>-<MODE>-<MODEL>-<EVENT>-<YYYYMMDDHHMMSS>[_<member>][_rNN].nc
 ```
 
-The experiment is the complete forcing and mode tag. `AN` means
-analysis/reanalysis driven, while `FC` means forecast driven.
+The experiment is the forcing and mode tag. `AN` means analysis/reanalysis
+driven, while `FC` means forecast driven.
 
 ```text
-RUMI-ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc
-RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc
+ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc
+GFS-FC-MPAS-HRAIN2025-20250804000000.nc
 ```
 
 For the second example:
 
-- `experiment = RUMI-GFS-FC`
+- `experiment = GFS-FC`
 - `model = MPAS`
 - `event = HRAIN2025`
 
@@ -159,12 +159,13 @@ Accepted uploads are indexed in SQLite and stored privately under the following
 directory structure:
 
 ```text
-submissions/<institution>/<experiment>/<model>/<event>/<upload_id>_<file-name>
+submissions/<institution>/<event>/<model>/<upload_id>_<file-name>
 ```
 
-Institution, experiment, model, and event make the files easy to browse and
-batch-process, while the upload ID prevents filename collisions. Institution
-is also stored as a snapshot on each upload record, so changing a user's
-profile later does not change the historical attribution or storage location.
+Institution, event, and model make the files easy to browse and batch-process;
+an archive can contain several experiment directories, so it is stored at the
+event/model level. The upload ID prevents filename collisions. Institution is
+also stored as a snapshot on each upload record, so changing a user's profile
+later does not change the historical attribution or storage location.
 Older submissions retain their original storage paths and remain accessible
 through the database index.
