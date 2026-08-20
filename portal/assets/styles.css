@@ -349,7 +349,7 @@ form.panel,
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 340px);
   gap: 18px;
   align-items: start;
 }
@@ -650,8 +650,8 @@ form.panel,
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.68rem;
   line-height: 1.5;
-  white-space: pre;
-  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   background: var(--surface-muted, rgba(127, 127, 127, 0.08));
   border-radius: 6px;
   color: var(--muted, inherit);
