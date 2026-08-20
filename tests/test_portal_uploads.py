@@ -46,6 +46,18 @@ class UploadWorkflowTests(unittest.TestCase):
         self.patches.enter_context(
             mock.patch.object(portal_api, "LOG_DIR", self.data_dir / "logs")
         )
+        # The live code keeps storage and cleanup helpers in portal_lib. Keep
+        # both modules pointed at the same isolated test tree.
+        self.patches.enter_context(mock.patch.object(portal_lib, "DATA_DIR", self.data_dir))
+        self.patches.enter_context(
+            mock.patch.object(portal_lib, "INCOMING_DIR", self.incoming_dir)
+        )
+        self.patches.enter_context(
+            mock.patch.object(portal_lib, "SUBMISSIONS_DIR", self.submissions_dir)
+        )
+        self.patches.enter_context(
+            mock.patch.object(portal_lib, "LOG_DIR", self.data_dir / "logs")
+        )
 
         self.con = sqlite3.connect(":memory:")
         self.con.row_factory = sqlite3.Row
@@ -185,7 +197,7 @@ class UploadWorkflowTests(unittest.TestCase):
 
     def test_archive_start_does_not_require_time_form_fields(self):
         payload = {
-            "file_name": "RUMI-GFS-FC-MODEL-HRAIN2025.zip",
+            "file_name": "HKUST-MODEL-HRAIN2025-MODELER-CONFIG01-r01.zip",
             "file_size": 123,
             "experiment": "RUMI-GFS-FC",
             "model": "MODEL",
@@ -295,31 +307,30 @@ class UploadWorkflowTests(unittest.TestCase):
             "archive-upload",
             "receiving",
             content=b"archive",
-            file_name="RUMI-GFS-FC-MODEL-HRAIN2025.zip",
+            file_name="HKUST-MODEL-HRAIN2025-MODELER-CONFIG01-r01.zip",
             file_kind="zip",
         )
 
-        result = self.finish(
-            "archive-upload",
-            {
-                "errors": [],
-                "warnings": [],
-                "summary": {
-                    "checked_netcdf_files": 5,
-                    "passed_netcdf_files": 5,
-                },
-            },
-        )
+        with mock.patch.object(
+            portal_api,
+            "subprocess",
+        ) as subprocess:
+            subprocess.Popen.return_value = mock.Mock(pid=1234)
+            result = self.finish(
+                "archive-upload",
+                {"errors": [], "warnings": [], "summary": {}},
+            )
 
-        self.assertEqual(result["upload"]["status"], "validated")
+        self.assertEqual(result["upload"]["status"], "queued")
         self.assertEqual(result["upload"]["file_kind"], "zip")
+        self.assertEqual(result["upload"]["validation_done"], 0)
 
     def test_finalization_error_becomes_terminal_server_error(self):
         self.insert_upload("blocked-upload", "receiving", content=b"valid")
         blocked_path = self.data_dir / "not-a-directory"
         blocked_path.write_text("blocked", encoding="utf-8")
 
-        with mock.patch.object(portal_api, "SUBMISSIONS_DIR", blocked_path):
+        with mock.patch.object(portal_lib, "SUBMISSIONS_DIR", blocked_path):
             result = self.finish(
                 "blocked-upload", {"errors": [], "warnings": [], "summary": {}}
             )
@@ -458,11 +469,15 @@ class NetcdfValidationTests(unittest.TestCase):
             ],
         }
 
-    def structured_archive_result(self, member_name, lead_time):
+    def structured_archive_result(self, member_name, initialization):
         with tempfile.TemporaryDirectory() as temp_dir:
-            archive_path = Path(temp_dir) / "batch.zip"
+            archive_stem = "HKUST-WRF-HRAIN2025-LIU-CONFIG01-r01"
+            archive_path = Path(temp_dir) / f"{archive_stem}.zip"
             with zipfile.ZipFile(archive_path, "w") as archive:
                 archive.writestr(member_name, b"not-a-real-netcdf")
+                archive.writestr(
+                    f"{archive_stem}/Participant_Model_Documentation.pdf", "test"
+                )
             with mock.patch.object(
                 portal_lib,
                 "validate_netcdf",
@@ -471,10 +486,10 @@ class NetcdfValidationTests(unittest.TestCase):
                     "warnings": [],
                     "summary": {
                         "time_metadata": {
-                            "simulation_start_time": "2025-08-03T00:00:00Z",
-                            "initialization_time": "2025-08-03T00:00:00Z",
-                            "forecast_initialization_time": "2025-08-03T00:00:00Z",
-                            "forecast_lead_time_hours": lead_time,
+                            "simulation_start_time": "2025-07-30T00:00:00Z",
+                            "initialization_time": initialization,
+                            "forecast_initialization_time": initialization,
+                            "horizontal_resolution": "1 km",
                         },
                     },
                 },
@@ -483,7 +498,7 @@ class NetcdfValidationTests(unittest.TestCase):
                     archive_path,
                     archive_path.name,
                     {
-                        "experiment": "RUMI-GFS-FC",
+                        "experiment": "GFS-FC",
                         "model": "WRF",
                         "event": "HRAIN2025",
                     },
@@ -664,14 +679,17 @@ class NetcdfValidationTests(unittest.TestCase):
 
     def test_archive_members_use_the_same_netcdf_validator(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            archive_path = Path(temp_dir) / "batch.zip"
+            archive_stem = "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01"
+            archive_path = Path(temp_dir) / f"{archive_stem}.zip"
             member_name = (
-                "results/lead_024h/"
-                "RUMI-GFS-FC-MPAS-HRAIN2025-20250804000000.nc"
+                f"{archive_stem}/GFS-FC/Init-5/"
+                "GFS-FC-MPAS-HRAIN2025-20250806000000.nc"
             )
             with zipfile.ZipFile(archive_path, "w") as archive:
                 archive.writestr(member_name, b"not-a-real-netcdf")
-                archive.writestr("technical-notes.txt", "test")
+                archive.writestr(
+                    f"{archive_stem}/Participant_Model_Documentation.pdf", "test"
+                )
 
             with mock.patch.object(
                 portal_lib,
@@ -681,10 +699,10 @@ class NetcdfValidationTests(unittest.TestCase):
                     "warnings": [],
                     "summary": {
                         "time_metadata": {
-                            "simulation_start_time": "2025-08-03T00:00:00Z",
-                            "initialization_time": "2025-08-03T00:00:00Z",
-                            "forecast_initialization_time": "2025-08-03T00:00:00Z",
-                            "forecast_lead_time_hours": "24",
+                            "simulation_start_time": "2025-07-30T00:00:00Z",
+                            "initialization_time": "2025-07-30T00:00:00Z",
+                            "forecast_initialization_time": "2025-07-30T00:00:00Z",
+                            "horizontal_resolution": "1 km",
                         },
                     },
                 },
@@ -693,7 +711,7 @@ class NetcdfValidationTests(unittest.TestCase):
                     archive_path,
                     archive_path.name,
                     {
-                        "experiment": "RUMI-GFS-FC",
+                        "experiment": "GFS-FC",
                         "model": "MPAS",
                         "event": "HRAIN2025",
                     },
@@ -702,49 +720,58 @@ class NetcdfValidationTests(unittest.TestCase):
         validator.assert_called_once()
         self.assertEqual(result["summary"]["validated_netcdf_files"], 1)
         self.assertIn(
-            member_name
-            + ": Standard core grid dimensions must be 171 lat by 234 lon.",
+            "Standard core grid dimensions must be 171 lat by 234 lon. ("
+            + member_name
+            + ")",
             result["errors"],
         )
 
-    def test_structured_archive_accepts_matching_lead_folder(self):
+    def test_structured_archive_accepts_matching_initialization_folder(self):
         member_name = (
-            "RUMI-GFS-FC-WRF-HRAIN2025/lead_024h/"
-            "RUMI-GFS-FC-WRF-HRAIN2025-20250804000000.nc"
+            "HKUST-WRF-HRAIN2025-LIU-CONFIG01-r01/GFS-FC/Init-5/"
+            "GFS-FC-WRF-HRAIN2025-20250806000000.nc"
         )
-        result = self.structured_archive_result(member_name, "24 hours")
+        result = self.structured_archive_result(member_name, "2025-07-30T00:00:00Z")
 
         self.assertEqual(result["errors"], [])
         self.assertEqual(result["summary"]["checked_netcdf_files"], 1)
         self.assertEqual(result["summary"]["passed_netcdf_files"], 1)
-        self.assertEqual(result["summary"]["lead_time_folders"], {"lead_024h": 1})
+        self.assertEqual(
+            result["summary"]["experiments"]["GFS-FC"]["Init-5"]["files"],
+            1,
+        )
 
-    def test_structured_archive_rejects_lead_time_mismatch(self):
+    def test_structured_archive_rejects_initialization_mismatch(self):
         member_name = (
-            "RUMI-GFS-FC-WRF-HRAIN2025/lead_024h/"
-            "RUMI-GFS-FC-WRF-HRAIN2025-20250804000000.nc"
+            "HKUST-WRF-HRAIN2025-LIU-CONFIG01-r01/GFS-FC/Init-5/"
+            "GFS-FC-WRF-HRAIN2025-20250806000000.nc"
         )
-        result = self.structured_archive_result(member_name, "48")
+        result = self.structured_archive_result(member_name, "2025-08-01T00:00:00Z")
 
-        self.assertEqual(result["summary"]["passed_netcdf_files"], 0)
-        self.assertIn(
-            member_name
-            + ": Directory lead_024h does not match global attribute "
-            "forecast_lead_time_hours=48.",
-            result["errors"],
+        self.assertEqual(result["summary"]["passed_netcdf_files"], 1)
+        self.assertTrue(
+            any(
+                "GFS-FC/Init-5: forecast_initialization_time is "
+                "2025-08-01T00:00:00Z, which is 48 hours from the Init-5 time"
+                in error
+                for error in result["errors"]
+            )
         )
 
-    def test_structured_archive_requires_lead_directory(self):
+    def test_structured_archive_requires_initialization_directory(self):
         member_name = (
-            "RUMI-GFS-FC-WRF-HRAIN2025/"
-            "RUMI-GFS-FC-WRF-HRAIN2025-20250804000000.nc"
+            "HKUST-WRF-HRAIN2025-LIU-CONFIG01-r01/GFS-FC/"
+            "GFS-FC-WRF-HRAIN2025-20250806000000.nc"
         )
-        result = self.structured_archive_result(member_name, "24")
+        result = self.structured_archive_result(member_name, "2025-07-30T00:00:00Z")
 
-        self.assertIn(
-            member_name
-            + ": NetCDF file must be stored under exactly one lead_NNNh directory.",
-            result["errors"],
+        self.assertTrue(
+            any(
+                "Every NetCDF file must be stored as "
+                "<archive>/<EXPERIMENT>/<Init-*>/<file>.nc."
+                in error
+                for error in result["errors"]
+            )
         )
 
 

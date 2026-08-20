@@ -6,6 +6,7 @@ from pathlib import Path
 
 from portal_lib import (
     DATA_DIR,
+    reap_stale_validations,
     connect_db,
     ensure_registration_code,
     hash_password,
@@ -153,6 +154,17 @@ def approve_whitelisted_pending(args):
     print(f"approved_pending={cur.rowcount}")
 
 
+def reap_validations(args):
+    """Fail archive validations whose worker stopped reporting.
+
+    Ordinary portal requests already do this opportunistically; this command is
+    for an administrator who wants to clear them immediately.
+    """
+    with connect_db() as con:
+        count = reap_stale_validations(con, args.older_than_minutes)
+    print(f"reaped_stale_validations={count}")
+
+
 def registration_code(args):
     with connect_db() as con:
         if args.reset:
@@ -192,6 +204,10 @@ def main():
 
     p_approve = sub.add_parser("approve-whitelisted-pending")
     p_approve.set_defaults(func=approve_whitelisted_pending)
+
+    p_reap = sub.add_parser("reap-stale-validations")
+    p_reap.add_argument("--older-than-minutes", type=int, default=30)
+    p_reap.set_defaults(func=reap_validations)
 
     p_code = sub.add_parser("registration-code")
     p_code.add_argument("--reset", action="store_true")

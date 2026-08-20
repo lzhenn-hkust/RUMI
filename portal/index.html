@@ -71,6 +71,7 @@
         <p class="muted">Download the template and helper script before preparing RUMI submissions.</p>
         <a class="download" href="api.cgi?action=download&amp;file=RUMI_template_2d.nc" download>RUMI_template_2d.nc</a>
         <a class="download" href="api.cgi?action=download&amp;file=create_ncdf.py" download>create_ncdf.py</a>
+        <a class="download" href="api.cgi?action=download&amp;file=rumi_validate.py" download>rumi_validate.py</a>
       </section>
     </section>
 
@@ -95,103 +96,130 @@
                 <span id="fileModeHint">.nc for a single snapshot, or .zip/.tar.gz for a structured archive.</span>
               </div>
             </div>
+            <div id="resumeHint" class="resume-hint hidden"></div>
 
-            <div class="form-grid">
-              <label>Experiment
-                <input name="experiment" list="experimentOptions" placeholder="RUMI-ERA5-AN" required>
-                <datalist id="experimentOptions"></datalist>
-              </label>
-              <label>Event
-                <select name="event" required></select>
-              </label>
-              <label>Model
-                <input name="model" placeholder="WRF, MPAS, UM" required>
-              </label>
-              <label>Forcing data
-                <input name="forcing_data" placeholder="ECMWF ERA5 Reanalysis" required>
-              </label>
-              <label>Forcing mode
-                <select name="forcing_mode" required>
-                  <option value="analysis">Analysis</option>
-                  <option value="forecast">Forecast</option>
-                </select>
-              </label>
-              <label>Forcing source
-                <input name="forcing_source" placeholder="ERA5, GFS" required>
-              </label>
-              <label>Forcing version
-                <input name="forcing_data_version" placeholder="v5">
-              </label>
-              <label>Forcing resolution
-                <input name="forcing_resolution" placeholder="0.25 degree">
-              </label>
-              <label>Forcing update interval
-                <input name="forcing_update_interval" placeholder="1 hour">
-              </label>
-              <label class="single-file-time">Simulation start time
-                <input name="simulation_start_time" placeholder="2018-09-15T00:00:00Z" data-required-single="true" required>
-              </label>
-              <label class="single-file-time">Initialization time
-                <input name="initialization_time" placeholder="2018-09-15T00:00:00Z" data-required-single="true" required>
-              </label>
-              <label class="single-file-time">Forecast initialization time
-                <input name="forecast_initialization_time" placeholder="2018-09-15T00:00:00Z">
-              </label>
-              <label class="single-file-time">Forecast lead time
-                <input name="forecast_lead_time_hours" placeholder="0 hours">
-              </label>
-              <label>Horizontal resolution
-                <input name="horizontal_resolution" placeholder="1 km" required>
-              </label>
-              <label>Version
-                <input name="version" placeholder="v01">
-              </label>
-              <label>Member
-                <input name="member" placeholder="mem01">
-              </label>
+            <div id="submissionContext" class="identity-grid">
+              <p class="identity-hint">Uploader identity and registered participation details are taken from your approved account.</p>
+              <dl class="identity-fields">
+                <dt>Uploader</dt><dd id="uploadIdentityName">—</dd>
+                <dt>Email</dt><dd id="uploadIdentityEmail">—</dd>
+                <dt>Institution</dt><dd id="uploadIdentityInstitution">—</dd>
+              </dl>
+              <div id="uploadParticipationProfiles" class="participation-profiles"></div>
             </div>
 
-            <details class="details">
-              <summary>Model physics and surface metadata</summary>
+            <div id="archiveIdentity" class="identity-grid hidden">
+              <p class="identity-hint">Read from your archive name — confirm it matches your submission.</p>
+              <dl class="identity-fields">
+                <dt>Institution</dt>
+                <dd><span id="identityInstitution">—</span> <span class="muted">(from your account)</span></dd>
+                <dt>Model</dt><dd id="identityModel">—</dd>
+                <dt>Event</dt><dd id="identityEvent">—</dd>
+                <dt>Contact</dt><dd id="identityContact">—</dd>
+                <dt>Config</dt><dd id="identityConfig">—</dd>
+                <dt>Version</dt><dd id="identityVersion">—</dd>
+              </dl>
+              <div id="archiveIdentityError" class="form-message error hidden" role="alert"></div>
+            </div>
+
+            <div id="singleFileFields" class="single-file-fields">
               <div class="form-grid">
-                <label>Microphysics
-                  <input name="microphysics_scheme">
+                <label>Experiment
+                  <input name="experiment" list="experimentOptions" placeholder="ERA5-AN" required>
+                  <datalist id="experimentOptions"></datalist>
                 </label>
-                <label>Cumulus/convection
-                  <input name="cumulus_scheme">
+                <label>Event
+                  <select name="event" required></select>
                 </label>
-                <label>PBL scheme
-                  <input name="pbl_scheme">
+                <label>Model
+                  <input name="model" placeholder="WRF, MPAS, UM" required>
                 </label>
-                <label>Radiation
-                  <input name="radiation_scheme">
+                <label>Forcing data
+                  <input name="forcing_data" placeholder="ECMWF ERA5 Reanalysis" required>
                 </label>
-                <label>Land surface model
-                  <input name="land_surface_scheme">
+                <label>Forcing mode
+                  <select name="forcing_mode" required>
+                    <option value="analysis">Analysis</option>
+                    <option value="forecast">Forecast</option>
+                  </select>
                 </label>
-                <label>Urban scheme
-                  <input name="urban_scheme">
+                <label>Forcing source
+                  <input name="forcing_source" placeholder="ERA5, GFS" required>
                 </label>
-                <label>Surface layer
-                  <input name="surface_layer_scheme">
+                <label>Forcing version
+                  <input name="forcing_data_version" placeholder="v5">
                 </label>
-                <label>Turbulence closure
-                  <input name="turbulence_closure">
+                <label>Forcing resolution
+                  <input name="forcing_resolution" placeholder="0.25 degree">
                 </label>
-                <label>Landuse dataset
-                  <input name="landuse_dataset">
+                <label>Forcing update interval
+                  <input name="forcing_update_interval" placeholder="1 hour">
                 </label>
-                <label>Urban morphology source
-                  <input name="urban_morphology_source">
+                <label class="single-file-time">Simulation start time
+                  <input name="simulation_start_time" placeholder="2018-09-15T00:00:00Z" data-required-single="true" required>
                 </label>
-                <label>Terrain dataset
-                  <input name="terrain_dataset">
+                <label class="single-file-time">Initialization time
+                  <input name="initialization_time" placeholder="2018-09-15T00:00:00Z" data-required-single="true" required>
                 </label>
-                <label>Soil dataset
-                  <input name="soil_dataset">
+                <label class="single-file-time">Forecast initialization time
+                  <input name="forecast_initialization_time" placeholder="2018-09-15T00:00:00Z">
+                </label>
+                <label class="single-file-time">Forecast lead time
+                  <input name="forecast_lead_time_hours" placeholder="0 hours">
+                </label>
+                <label>Horizontal resolution
+                  <input name="horizontal_resolution" placeholder="1 km" required>
+                </label>
+                <label>Version
+                  <input name="version" placeholder="r01">
+                </label>
+                <label>Member
+                  <input name="member" placeholder="mem01">
                 </label>
               </div>
-            </details>
+
+              <details class="details">
+                <summary>Model physics and surface metadata</summary>
+                <div class="form-grid">
+                  <label>Microphysics
+                    <input name="microphysics_scheme">
+                  </label>
+                  <label>Cumulus/convection
+                    <input name="cumulus_scheme">
+                  </label>
+                  <label>PBL scheme
+                    <input name="pbl_scheme">
+                  </label>
+                  <label>Radiation
+                    <input name="radiation_scheme">
+                  </label>
+                  <label>Land surface model
+                    <input name="land_surface_scheme">
+                  </label>
+                  <label>Urban scheme
+                    <input name="urban_scheme">
+                  </label>
+                  <label>Surface layer
+                    <input name="surface_layer_scheme">
+                  </label>
+                  <label>Turbulence closure
+                    <input name="turbulence_closure">
+                  </label>
+                  <label>Landuse dataset
+                    <input name="landuse_dataset">
+                  </label>
+                  <label>Urban morphology source
+                    <input name="urban_morphology_source">
+                  </label>
+                  <label>Terrain dataset
+                    <input name="terrain_dataset">
+                  </label>
+                  <label>Soil dataset
+                    <input name="soil_dataset">
+                  </label>
+                </div>
+              </details>
+            </div>
 
             <label>Technical notes
               <textarea name="technical_notes" rows="5" placeholder="Initial/boundary conditions, DA or AI methods, spin-up, SST, soil initialization"></textarea>
@@ -212,11 +240,26 @@
           </div>
 
           <aside class="side-panel">
-            <h3>Required 2D core</h3>
+            <h3>Required (9)</h3>
             <ul id="coreVarList" class="token-list"></ul>
+            <h3>Recommended radiation</h3>
+            <p class="muted" id="radiationVarNote"></p>
+            <ul id="radiationVarList" class="token-list"></ul>
+            <h3>Recommended pressure-level</h3>
+            <p class="muted" id="mandatory3dVarNote"></p>
+            <ul id="mandatory3dVarList" class="token-list"></ul>
+            <h3>Archive layout</h3>
+            <p class="archive-name-pattern"><code>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;-&lt;CONFIG&gt;-r&lt;NN&gt;.tar.gz</code></p>
+            <pre class="archive-layout">└─ &lt;same name&gt;/
+   ├─ Participant_Model_
+   │    Documentation.pdf
+   └─ &lt;ERA5-AN|GFS-FC&gt;/
+        &lt;Init-*&gt;/*.nc</pre>
+            <p class="muted">Run rumi_validate.py before packing.</p>
             <h3>Downloads</h3>
             <a class="download" href="api.cgi?action=download&amp;file=RUMI_template_2d.nc" download>RUMI_template_2d.nc</a>
             <a class="download" href="api.cgi?action=download&amp;file=create_ncdf.py" download>create_ncdf.py</a>
+            <a class="download" href="api.cgi?action=download&amp;file=rumi_validate.py" download>rumi_validate.py</a>
           </aside>
         </form>
       </section>
@@ -255,6 +298,7 @@
                     <th>Name</th>
                     <th>Email</th>
                     <th>Institution</th>
+                    <th>Participation</th>
                     <th>Role</th>
                     <th>Status</th>
                     <th></th>
@@ -276,11 +320,21 @@
         </div>
       </section>
 
-      <section id="accountTab" class="tab-panel hidden">
+      <section id="accountTab" class="tab-panel account-grid hidden">
+        <section class="panel stack">
+          <div class="panel-head">
+            <h2>Submission identity</h2>
+            <span class="pill">From your account</span>
+          </div>
+          <dl id="accountIdentityFields" class="identity-fields"></dl>
+          <div id="accountParticipationProfiles" class="participation-profiles"></div>
+          <p class="field-hint">These values are used for submission attribution. Contact an administrator if your registered identity or participation profile needs correction.</p>
+        </section>
+
         <form id="passwordForm" class="panel stack">
           <div class="panel-head">
-            <h2>Account</h2>
-            <span class="pill">Password</span>
+            <h2>Password</h2>
+            <span class="pill">Account</span>
           </div>
           <label>Current password
             <input name="current_password" type="password" autocomplete="current-password" required>
@@ -305,9 +359,10 @@
               <dt>Coordinates</dt><dd>lat: 22.12 to 22.57805556; lon: 113.82 to 114.44780556</dd>
               <dt>Frequency</dt><dd>hourly minimum, one time snapshot per file</dd>
               <dt>Format</dt><dd>NetCDF4, CF-1.8, _FillValue = -9999.0</dd>
-              <dt>Name</dt><dd>&lt;RUMI experiment&gt;-&lt;Model&gt;-&lt;Event&gt;-&lt;YYYYMMDDHHMMSS&gt;.nc</dd>
-              <dt>Archives</dt><dd>one experiment per ZIP/TAR; place every NetCDF under lead_NNNh</dd>
-              <dt>3D fields</dt><dd>850, 500, and 200 hPa; recommended to archive, not currently required</dd>
+              <dt>Name</dt><dd>&lt;experiment&gt;-&lt;Model&gt;-&lt;Event&gt;-&lt;YYYYMMDDHHMMSS&gt;.nc</dd>
+              <dt>Archives</dt><dd>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;-&lt;CONFIG&gt;-r&lt;NN&gt;.tar.gz, containing a top directory of the same name with Participant_Model_Documentation.pdf and ERA5-AN|GFS-FC/Init-*/*.nc</dd>
+              <dt>3D fields (recommended)</dt><dd id="format3dFields">—</dd>
+              <dt>Rules version</dt><dd id="rulesVersion">—</dd>
             </dl>
           </section>
         </div>
@@ -316,6 +371,6 @@
   </main>
 
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="assets/app.js?v=20260817-institution-folders"></script>
+  <script src="assets/app.js?v=20260820-participation-v1"></script>
 </body>
 </html>
