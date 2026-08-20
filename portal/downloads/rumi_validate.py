@@ -86,7 +86,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-RULES_VERSION = "2026-08-rumi-v3"
+RULES_VERSION = "2026-08-rumi-v3.1"
 OUTPUT_INTERVAL_HOURS = 1
 
 # ---------------------------------------------------------------------------
@@ -398,7 +398,7 @@ RUMI_FILENAME_RE = re.compile(
 ARCHIVE_NAME_RE = re.compile(
     r"^([A-Z0-9]+)-([A-Z0-9]+)-("
     + "|".join(EVENTS.keys())
-    + r")-([A-Z0-9]+)-([A-Z0-9]+)-r(\d{2,})\.(tar\.gz|tgz|zip)$"
+    + r")-([A-Z0-9]+)\.(tar\.gz|zip)$"
 )
 ARCHIVE_NAME_PATTERN = ARCHIVE_NAME_RE.pattern
 
@@ -432,25 +432,26 @@ def parse_archive_name(name: str) -> Optional[Dict[str, str]]:
     """Parse a v3 archive file name.
 
     Expected form:
-    ``<INSTITUTION>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>.(tar.gz|tgz|zip)``
+    ``<INST>-<MODEL>-<EVENT>-<POC>.(tar.gz|zip)``
 
     Returns a dict with keys ``institution``, ``model``, ``event``, ``poc``,
-    ``config``, ``version``, ``extension``, ``stem`` (the archive name with
+    ``config``, ``version``, ``extension``, ``stem`` (the compatibility config
+    and version values are empty because they now belong in the PDF), with
     its extension removed, e.g. ``.tar.gz`` is removed as a whole, not just
     ``.gz``), or ``None`` if ``name`` does not match.
     """
     match = ARCHIVE_NAME_RE.match(name or "")
     if not match:
         return None
-    institution, model, event, poc, config, version, extension = match.groups()
+    institution, model, event, poc, extension = match.groups()
     stem = name[: -(len(extension) + 1)]
     return {
         "institution": institution,
         "model": model,
         "event": event,
         "poc": poc,
-        "config": config,
-        "version": version,
+        "config": "",
+        "version": "",
         "extension": extension,
         "stem": stem,
     }
@@ -615,7 +616,7 @@ def archive_stem(filename):
     if parsed:
         return parsed["stem"]
     lower = filename.lower()
-    for extension in (".tar.gz", ".tgz", ".zip"):
+    for extension in (".tar.gz", ".zip"):
         if lower.endswith(extension):
             return filename[: -len(extension)]
     return filename
@@ -685,9 +686,8 @@ def validate_archive_structure(names, filename):
     summary["archive"] = archive
     if not archive:
         errors.add(
-            "Archive name must be <INSTITUTE>-<MODEL>-<EVENT>-<POC>-"
-            "<CONFIG>-r<NN>.tar.gz, for example "
-            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz. Fields must be "
+            "Archive name must be <INST>-<MODEL>-<EVENT>-<POC>.tar.gz or .zip, "
+            "for example HKUST-MPAS-HRAIN2025-SHI.tar.gz. Fields must be "
             "uppercase letters and digits without hyphens, so a model such as "
             "WRF-ARW is written WRFARW."
         )
@@ -1237,7 +1237,7 @@ def validate_netcdf_facts(filename, facts, metadata=None):
 # ============================================================================
 
 # ---------------------------------------------------------------------------
-# CLI: reads files (directory tree or .tar.gz/.tgz/.zip archive) and NetCDF
+# CLI: reads files (directory tree or .tar.gz/.zip archive) and NetCDF
 # metadata (via netCDF4 or ncdump), then formats a report. Every pass/fail
 # judgement below is delegated to the inlined functions above -- this
 # section never decides on its own whether a submission is valid.
@@ -1308,7 +1308,7 @@ def _open_archive_source(path):
     lower = str(path).lower()
     if lower.endswith(".zip"):
         return _ZipSource(path)
-    if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
+    if lower.endswith(".tar.gz"):
         return _TarSource(path)
     raise ValueError(f"unsupported archive type: {path}")
 
@@ -1348,7 +1348,7 @@ def _resolve_target(target_path):
         return "directory", names, f"{stem}.tar.gz", local_path, (lambda: None)
 
     lower = str(target_path).lower()
-    if target_path.is_file() and lower.endswith((".tar.gz", ".tgz", ".zip")):
+    if target_path.is_file() and lower.endswith((".tar.gz", ".zip")):
         source = _open_archive_source(target_path)
         names = sorted(source.names())
 
@@ -1661,7 +1661,7 @@ def run(args):
     if kind is None:
         print(
             f"error: {target_path} is neither a directory nor a "
-            f".tar.gz/.tgz/.zip archive.",
+            f".tar.gz/.zip archive.",
             file=sys.stderr,
         )
         return 2
@@ -1806,13 +1806,13 @@ def _build_parser():
         prog="rumi_validate.py",
         description=(
             "Validate a RUMI v3 submission (an extracted directory, or a "
-            ".tar.gz/.tgz/.zip archive) against the same rules the portal "
+            ".tar.gz/.zip archive) against the same rules the portal "
             "uses, so problems can be found and fixed before uploading."
         ),
     )
     parser.add_argument(
         "path",
-        help="Path to an extracted submission directory, or a .tar.gz/.tgz/.zip archive.",
+        help="Path to an extracted submission directory, or a .tar.gz/.zip archive.",
     )
     parser.add_argument(
         "--write-manifest",

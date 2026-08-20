@@ -99,7 +99,7 @@ class ParticipationProfileTests(unittest.TestCase):
         user = dict(self.con.execute("SELECT * FROM users WHERE id = 5").fetchone())
         portal_lib.seed_participation_profiles(self.con)
         payload = {
-            "file_name": "HKUST-MPAS-HRAIN2025-SHI-CONFIG01-r01.zip",
+            "file_name": "HKUST-MPAS-HRAIN2025-SHI.zip",
             "file_size": 1,
             "participants": "Forged participant list",
         }

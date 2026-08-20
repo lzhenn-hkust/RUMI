@@ -174,23 +174,6 @@ function renderVarList(selector, names) {
 
 function fillConstants() {
   if (!state.constants) return;
-  const experimentList = $("#experimentOptions");
-  const eventSelect = $('[name="event"]', $("#uploadForm"));
-  if (!experimentList.children.length) {
-    state.constants.experiments.forEach((item) => {
-      const option = document.createElement("option");
-      option.value = item;
-      experimentList.append(option);
-    });
-  }
-  if (!eventSelect.options.length) {
-    Object.entries(state.constants.events).forEach(([code, item]) => {
-      const option = document.createElement("option");
-      option.value = code;
-      option.textContent = `${code} · ${item.category}`;
-      eventSelect.append(option);
-    });
-  }
   renderVarList("#coreVarList", state.constants.core_2d_vars);
   renderVarList("#radiationVarList", state.constants.recommended_radiation_vars);
   $("#radiationVarNote").textContent =
@@ -467,27 +450,11 @@ async function logout() {
   }
 }
 
-function parseFileName(name) {
-  if (!state.constants) return null;
-  const events = Object.keys(state.constants.events).join("|");
-  const pattern = new RegExp(`^([A-Za-z0-9._]+(?:-[A-Za-z0-9._]+)*)-(AN|FC)-([A-Za-z0-9._]+)-(${events})-(\\d{14})(?:_([A-Za-z0-9._-]+))?(?:_r([0-9]{2,}))?\\.nc$`);
-  const match = name.match(pattern);
-  if (!match) return null;
-  return {
-    experiment: `${match[1]}-${match[2]}`,
-    model: match[3],
-    event: match[4],
-    stamp: match[5],
-    member: match[6] || "",
-    version: match[7] ? `r${match[7]}` : "",
-  };
-}
-
 function isArchiveFile(file) {
-  return Boolean(file && /(?:\.zip|\.tar\.gz|\.tgz)$/i.test(file.name));
+  return Boolean(file && /(?:\.zip|\.tar\.gz)$/i.test(file.name));
 }
 
-// Archive identity (institution/model/event/poc/config/version) is parsed
+// Archive identity (institution/model/event/poc) is parsed
 // entirely from the file name - the server is authoritative here too and
 // overwrites anything the form would otherwise send, so both sides must
 // agree on the pattern. Rather than keep a second hand-written regex in
@@ -498,12 +465,12 @@ function parseArchiveName(name) {
   const pattern = new RegExp(state.constants.archive_name_pattern);
   const match = name.match(pattern);
   if (!match) return null;
-  const [, institution, model, event, poc, config, version] = match;
-  return {institution, model, event, poc, config, version: `r${version}`};
+  const [, institution, model, event, poc] = match;
+  return {institution, model, event, poc};
 }
 
-const ARCHIVE_NAME_ERROR = "Archive name must be <INSTITUTE>-<MODEL>-<EVENT>-<POC>-" +
-  "<CONFIG>-r<NN>.tar.gz, for example HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz. " +
+const ARCHIVE_NAME_ERROR = "Archive name must be <INST>-<MODEL>-<EVENT>-<POC>.tar.gz or .zip, " +
+  "for example HKUST-MPAS-HRAIN2025-SHI.tar.gz. " +
   "Fields must be uppercase letters and digits without hyphens, so a model such as WRF-ARW " +
   "is written WRFARW.";
 
@@ -512,8 +479,6 @@ const IDENTITY_FIELD_IDS = [
   "identityModel",
   "identityEvent",
   "identityContact",
-  "identityConfig",
-  "identityVersion",
 ];
 
 function resetArchiveIdentityFields() {
@@ -536,71 +501,41 @@ function showArchiveIdentityError(message) {
 
 function renderArchiveIdentity(parsed) {
   formMessage("#archiveIdentityError");
-  $("#identityInstitution").textContent = state.user?.institution || "—";
+  $("#identityInstitution").textContent = parsed.institution;
   $("#identityModel").textContent = parsed.model;
   $("#identityEvent").textContent = parsed.event;
   $("#identityContact").textContent = parsed.poc;
-  $("#identityConfig").textContent = parsed.config;
-  $("#identityVersion").textContent = parsed.version;
   setUploadSubmitEnabled(true);
 }
 
 function setUploadMode(file) {
   const archive = isArchiveFile(file);
-  const form = $("#uploadForm");
-  const singleFileFields = $("#singleFileFields");
-  singleFileFields.classList.toggle("hidden", archive);
   $("#archiveIdentity").classList.toggle("hidden", !archive);
-  // The single-file-only fields are disabled (not just hidden) in archive
-  // mode so formDataObject(form) - a plain FormData read - naturally leaves
-  // them out of the upload_start payload instead of sending a pile of blank
-  // fields the server would just ignore.
-  $$("input, select, textarea", singleFileFields).forEach((field) => {
-    field.disabled = archive;
-  });
-  $$(".single-file-time", form).forEach((label) => {
-    label.classList.toggle("hidden", archive);
-    const input = $("input", label);
-    input.disabled = archive;
-    input.required = !archive && input.dataset.requiredSingle === "true";
-  });
-  $("#fileModeHint").textContent = archive
-    ? "Structured archive: identity below is read from the archive name; one event per archive."
-    : ".nc for a single snapshot, or .zip/.tar.gz for a structured archive.";
+  $("#fileModeHint").textContent =
+    "Upload a .zip or .tar.gz structured archive containing the required NetCDF files and Participant_Model_Documentation.pdf.";
   if (archive) {
     resetArchiveIdentityFields();
     formMessage("#archiveIdentityError");
     setUploadSubmitEnabled(false);
   } else {
-    formMessage("#archiveIdentityError");
-    setUploadSubmitEnabled(true);
+    resetArchiveIdentityFields();
+    if (file) {
+      showArchiveIdentityError("Only .zip and .tar.gz structured archives are accepted.");
+    } else {
+      formMessage("#archiveIdentityError");
+      setUploadSubmitEnabled(false);
+    }
   }
 }
 
 function autoFillFromFile(file) {
-  if (isArchiveFile(file)) {
-    const parsed = parseArchiveName(file.name);
-    if (!parsed) {
-      showArchiveIdentityError(ARCHIVE_NAME_ERROR);
-      return;
-    }
-    renderArchiveIdentity(parsed);
+  if (!isArchiveFile(file)) return;
+  const parsed = parseArchiveName(file.name);
+  if (!parsed) {
+    showArchiveIdentityError(ARCHIVE_NAME_ERROR);
     return;
   }
-  const parsed = parseFileName(file.name);
-  if (!parsed) return;
-  const form = $("#uploadForm");
-  form.elements.experiment.value = parsed.experiment;
-  form.elements.model.value = parsed.model;
-  form.elements.event.value = parsed.event;
-  form.elements.member.value = parsed.member;
-  form.elements.version.value = parsed.version;
-  const experimentParts = parsed.experiment.split("-");
-  const mode = experimentParts.at(-1);
-  if (mode === "AN" || mode === "FC") {
-    form.elements.forcing_mode.value = mode === "AN" ? "analysis" : "forecast";
-    form.elements.forcing_source.value = experimentParts.slice(1, -1).join("-");
-  }
+  renderArchiveIdentity(parsed);
 }
 
 function setProgress(done, total, label) {

@@ -132,23 +132,25 @@ before accepting a submission.
 
 ## Structured Archives
 
-Participants may upload one `.zip`, `.tar.gz`, or `.tgz` archive for an
-experiment. Every NetCDF file must be stored under a three-digit lead-time
-directory, and the directory must agree with the file's global
-`forecast_lead_time_hours` attribute.
+Participants upload one `.zip` or `.tar.gz` structured archive for an event.
+The archive filename must contain only the institution, model, event, and point
+of contact. Configuration and revision details belong in
+`Participant_Model_Documentation.pdf`.
 
 ```text
-RUMI-GFS-FC-WRF-HRAIN2025/
-|-- lead_024h/
-|-- lead_048h/
-|-- lead_072h/
-|-- lead_096h/
-`-- lead_120h/
+HKUST-MPAS-HRAIN2025-SHI.tar.gz
+`-- HKUST-MPAS-HRAIN2025-SHI/
+    |-- Participant_Model_Documentation.pdf
+    |-- ERA5-AN/
+    |   `-- Init-*/
+    `-- GFS-FC/
+        `-- Init-*/
 ```
 
-Each NetCDF member is checked with the same validator used for single-file
-uploads. Archive acceptance is all-or-nothing. Time fields are read from each
-NetCDF file, so they do not need to be entered separately in the archive upload
+Each NetCDF member is checked with the portal's shared NetCDF validator.
+Archive acceptance is all-or-nothing. Time fields and model
+configuration details are read from the NetCDF global attributes and the
+participant documentation, so they do not need to be entered in the upload
 form.
 
 ## Portal Storage Organization

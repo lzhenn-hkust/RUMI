@@ -90,10 +90,10 @@
         <form id="uploadForm" class="workspace">
           <div class="upload-main">
             <div class="dropzone">
-              <input id="fileInput" name="file" type="file" accept=".nc,.zip,.tar.gz,.tgz" required>
+              <input id="fileInput" name="file" type="file" accept=".zip,.tar.gz" required>
               <div>
-                <strong>Select submission file</strong>
-                <span id="fileModeHint">.nc for a single snapshot, or .zip/.tar.gz for a structured archive.</span>
+                <strong>Select submission archive</strong>
+                <span id="fileModeHint">Upload a .zip or .tar.gz structured archive containing the required NetCDF files and Participant_Model_Documentation.pdf.</span>
               </div>
             </div>
             <div id="resumeHint" class="resume-hint hidden"></div>
@@ -109,121 +109,16 @@
             </div>
 
             <div id="archiveIdentity" class="identity-grid hidden">
-              <p class="identity-hint">Read from your archive name — confirm it matches your submission.</p>
+              <p class="identity-hint">Read from your archive name. Configuration and revision details belong in Participant_Model_Documentation.pdf.</p>
               <dl class="identity-fields">
                 <dt>Institution</dt>
-                <dd><span id="identityInstitution">—</span> <span class="muted">(from your account)</span></dd>
+                <dd id="identityInstitution">—</dd>
                 <dt>Model</dt><dd id="identityModel">—</dd>
                 <dt>Event</dt><dd id="identityEvent">—</dd>
                 <dt>Contact</dt><dd id="identityContact">—</dd>
-                <dt>Config</dt><dd id="identityConfig">—</dd>
-                <dt>Version</dt><dd id="identityVersion">—</dd>
               </dl>
               <div id="archiveIdentityError" class="form-message error hidden" role="alert"></div>
             </div>
-
-            <div id="singleFileFields" class="single-file-fields">
-              <div class="form-grid">
-                <label>Experiment
-                  <input name="experiment" list="experimentOptions" placeholder="ERA5-AN" required>
-                  <datalist id="experimentOptions"></datalist>
-                </label>
-                <label>Event
-                  <select name="event" required></select>
-                </label>
-                <label>Model
-                  <input name="model" placeholder="WRF, MPAS, UM" required>
-                </label>
-                <label>Forcing data
-                  <input name="forcing_data" placeholder="ECMWF ERA5 Reanalysis" required>
-                </label>
-                <label>Forcing mode
-                  <select name="forcing_mode" required>
-                    <option value="analysis">Analysis</option>
-                    <option value="forecast">Forecast</option>
-                  </select>
-                </label>
-                <label>Forcing source
-                  <input name="forcing_source" placeholder="ERA5, GFS" required>
-                </label>
-                <label>Forcing version
-                  <input name="forcing_data_version" placeholder="v5">
-                </label>
-                <label>Forcing resolution
-                  <input name="forcing_resolution" placeholder="0.25 degree">
-                </label>
-                <label>Forcing update interval
-                  <input name="forcing_update_interval" placeholder="1 hour">
-                </label>
-                <label class="single-file-time">Simulation start time
-                  <input name="simulation_start_time" placeholder="2018-09-15T00:00:00Z" data-required-single="true" required>
-                </label>
-                <label class="single-file-time">Initialization time
-                  <input name="initialization_time" placeholder="2018-09-15T00:00:00Z" data-required-single="true" required>
-                </label>
-                <label class="single-file-time">Forecast initialization time
-                  <input name="forecast_initialization_time" placeholder="2018-09-15T00:00:00Z">
-                </label>
-                <label class="single-file-time">Forecast lead time
-                  <input name="forecast_lead_time_hours" placeholder="0 hours">
-                </label>
-                <label>Horizontal resolution
-                  <input name="horizontal_resolution" placeholder="1 km" required>
-                </label>
-                <label>Version
-                  <input name="version" placeholder="r01">
-                </label>
-                <label>Member
-                  <input name="member" placeholder="mem01">
-                </label>
-              </div>
-
-              <details class="details">
-                <summary>Model physics and surface metadata</summary>
-                <div class="form-grid">
-                  <label>Microphysics
-                    <input name="microphysics_scheme">
-                  </label>
-                  <label>Cumulus/convection
-                    <input name="cumulus_scheme">
-                  </label>
-                  <label>PBL scheme
-                    <input name="pbl_scheme">
-                  </label>
-                  <label>Radiation
-                    <input name="radiation_scheme">
-                  </label>
-                  <label>Land surface model
-                    <input name="land_surface_scheme">
-                  </label>
-                  <label>Urban scheme
-                    <input name="urban_scheme">
-                  </label>
-                  <label>Surface layer
-                    <input name="surface_layer_scheme">
-                  </label>
-                  <label>Turbulence closure
-                    <input name="turbulence_closure">
-                  </label>
-                  <label>Landuse dataset
-                    <input name="landuse_dataset">
-                  </label>
-                  <label>Urban morphology source
-                    <input name="urban_morphology_source">
-                  </label>
-                  <label>Terrain dataset
-                    <input name="terrain_dataset">
-                  </label>
-                  <label>Soil dataset
-                    <input name="soil_dataset">
-                  </label>
-                </div>
-              </details>
-            </div>
-
-            <label>Technical notes
-              <textarea name="technical_notes" rows="5" placeholder="Initial/boundary conditions, DA or AI methods, spin-up, SST, soil initialization"></textarea>
-            </label>
 
             <div class="progress-wrap hidden" id="progressWrap">
               <div class="progress-line">
@@ -249,7 +144,7 @@
             <p class="muted" id="mandatory3dVarNote"></p>
             <ul id="mandatory3dVarList" class="token-list"></ul>
             <h3>Archive layout</h3>
-            <p class="archive-name-pattern"><code>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;-&lt;CONFIG&gt;-r&lt;NN&gt;.tar.gz</code></p>
+            <p class="archive-name-pattern"><code>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;.tar.gz</code> or <code>.zip</code></p>
             <pre class="archive-layout">└─ &lt;same name&gt;/
    ├─ Participant_Model_
    │    Documentation.pdf
@@ -360,7 +255,7 @@
               <dt>Frequency</dt><dd>hourly minimum, one time snapshot per file</dd>
               <dt>Format</dt><dd>NetCDF4, CF-1.8, _FillValue = -9999.0</dd>
               <dt>Name</dt><dd>&lt;experiment&gt;-&lt;Model&gt;-&lt;Event&gt;-&lt;YYYYMMDDHHMMSS&gt;.nc</dd>
-              <dt>Archives</dt><dd>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;-&lt;CONFIG&gt;-r&lt;NN&gt;.tar.gz, containing a top directory of the same name with Participant_Model_Documentation.pdf and ERA5-AN|GFS-FC/Init-*/*.nc</dd>
+              <dt>Archives</dt><dd>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;.tar.gz or .zip, containing a top directory of the same name with Participant_Model_Documentation.pdf and ERA5-AN|GFS-FC/Init-*/*.nc</dd>
               <dt>3D fields (recommended)</dt><dd id="format3dFields">—</dd>
               <dt>Rules version</dt><dd id="rulesVersion">—</dd>
             </dl>
@@ -371,6 +266,6 @@
   </main>
 
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="assets/app.js?v=20260820-participation-v1"></script>
+  <script src="assets/app.js?v=20260820-archive-v2"></script>
 </body>
 </html>

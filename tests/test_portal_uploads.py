@@ -170,13 +170,15 @@ class UploadWorkflowTests(unittest.TestCase):
         self.assertIsNone(result["upload"].get("stored_path"))
 
     def test_same_filename_requires_explicit_replacement(self):
-        self.insert_upload("existing-upload", "validated")
+        self.insert_upload(
+            "existing-upload",
+            "validated",
+            file_name="HKUST-MODEL-HRAIN2025-MODELER.zip",
+            file_kind="zip",
+        )
         payload = {
-            "file_name": "RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+            "file_name": "HKUST-MODEL-HRAIN2025-MODELER.zip",
             "file_size": 123,
-            "experiment": "RUMI-GFS-FC",
-            "model": "MODEL",
-            "event": "HRAIN2025",
         }
 
         with mock.patch.object(portal_api, "read_json", return_value=payload):
@@ -197,7 +199,7 @@ class UploadWorkflowTests(unittest.TestCase):
 
     def test_archive_start_does_not_require_time_form_fields(self):
         payload = {
-            "file_name": "HKUST-MODEL-HRAIN2025-MODELER-CONFIG01-r01.zip",
+            "file_name": "HKUST-MODEL-HRAIN2025-MODELER.zip",
             "file_size": 123,
             "experiment": "RUMI-GFS-FC",
             "model": "MODEL",
@@ -217,6 +219,23 @@ class UploadWorkflowTests(unittest.TestCase):
         self.assertEqual(metadata["forecast_lead_time_hours"], "")
 
         self.assertEqual(row["institution"], "HKUST")
+
+    def test_new_uploads_reject_single_files_and_tgz_archives(self):
+        for file_name in (
+            "GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+            "HKUST-MODEL-HRAIN2025-MODELER.tgz",
+        ):
+            with self.subTest(file_name=file_name):
+                with mock.patch.object(
+                    portal_api,
+                    "read_json",
+                    return_value={"file_name": file_name, "file_size": 123},
+                ):
+                    with self.assertRaises(portal_lib.PortalError) as raised:
+                        portal_api.handle_upload_start(self.con)
+
+                self.assertEqual(raised.exception.status, 400)
+                self.assertEqual(raised.exception.details["code"], "archive_only")
 
     def test_identical_content_is_rejected_as_duplicate(self):
         digest = portal_lib.hashlib.sha256(b"same").hexdigest()
@@ -307,7 +326,7 @@ class UploadWorkflowTests(unittest.TestCase):
             "archive-upload",
             "receiving",
             content=b"archive",
-            file_name="HKUST-MODEL-HRAIN2025-MODELER-CONFIG01-r01.zip",
+            file_name="HKUST-MODEL-HRAIN2025-MODELER.zip",
             file_kind="zip",
         )
 
@@ -471,7 +490,7 @@ class NetcdfValidationTests(unittest.TestCase):
 
     def structured_archive_result(self, member_name, initialization):
         with tempfile.TemporaryDirectory() as temp_dir:
-            archive_stem = "HKUST-WRF-HRAIN2025-LIU-CONFIG01-r01"
+            archive_stem = "HKUST-WRF-HRAIN2025-LIU"
             archive_path = Path(temp_dir) / f"{archive_stem}.zip"
             with zipfile.ZipFile(archive_path, "w") as archive:
                 archive.writestr(member_name, b"not-a-real-netcdf")
@@ -518,6 +537,27 @@ class NetcdfValidationTests(unittest.TestCase):
         )
 
         self.assertIsNone(parsed)
+
+    def test_archive_name_uses_only_four_identity_fields(self):
+        parsed = portal_lib.parse_archive_name("HKUST-MPAS-HRAIN2025-SHI.tar.gz")
+
+        self.assertEqual(
+            {key: parsed[key] for key in ("institution", "model", "event", "poc")},
+            {
+                "institution": "HKUST",
+                "model": "MPAS",
+                "event": "HRAIN2025",
+                "poc": "SHI",
+            },
+        )
+        self.assertEqual(parsed["config"], "")
+        self.assertEqual(parsed["version"], "")
+        self.assertIsNone(
+            portal_lib.parse_archive_name(
+                "HKUST-MPAS-HRAIN2025-SHI-CONFIG01-r01.tar.gz"
+            )
+        )
+        self.assertIsNone(portal_lib.parse_archive_name("HKUST-MPAS-HRAIN2025-SHI.tgz"))
 
     def test_coordinate_dump_requests_full_precision(self):
         completed = mock.Mock(
@@ -679,7 +719,7 @@ class NetcdfValidationTests(unittest.TestCase):
 
     def test_archive_members_use_the_same_netcdf_validator(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            archive_stem = "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01"
+            archive_stem = "HKUST-MPAS-HRAIN2025-LIU"
             archive_path = Path(temp_dir) / f"{archive_stem}.zip"
             member_name = (
                 f"{archive_stem}/GFS-FC/Init-5/"
@@ -728,7 +768,7 @@ class NetcdfValidationTests(unittest.TestCase):
 
     def test_structured_archive_accepts_matching_initialization_folder(self):
         member_name = (
-            "HKUST-WRF-HRAIN2025-LIU-CONFIG01-r01/GFS-FC/Init-5/"
+            "HKUST-WRF-HRAIN2025-LIU/GFS-FC/Init-5/"
             "GFS-FC-WRF-HRAIN2025-20250806000000.nc"
         )
         result = self.structured_archive_result(member_name, "2025-07-30T00:00:00Z")
@@ -743,7 +783,7 @@ class NetcdfValidationTests(unittest.TestCase):
 
     def test_structured_archive_rejects_initialization_mismatch(self):
         member_name = (
-            "HKUST-WRF-HRAIN2025-LIU-CONFIG01-r01/GFS-FC/Init-5/"
+            "HKUST-WRF-HRAIN2025-LIU/GFS-FC/Init-5/"
             "GFS-FC-WRF-HRAIN2025-20250806000000.nc"
         )
         result = self.structured_archive_result(member_name, "2025-08-01T00:00:00Z")
@@ -760,7 +800,7 @@ class NetcdfValidationTests(unittest.TestCase):
 
     def test_structured_archive_requires_initialization_directory(self):
         member_name = (
-            "HKUST-WRF-HRAIN2025-LIU-CONFIG01-r01/GFS-FC/"
+            "HKUST-WRF-HRAIN2025-LIU/GFS-FC/"
             "GFS-FC-WRF-HRAIN2025-20250806000000.nc"
         )
         result = self.structured_archive_result(member_name, "2025-07-30T00:00:00Z")

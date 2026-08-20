@@ -547,6 +547,13 @@ def handle_upload_start(con):
     if user_storage_bytes(con, user["id"]) + size > USER_STORAGE_QUOTA_BYTES:
         raise PortalError(400, "User storage quota would be exceeded.")
     kind = file_kind(file_name)
+    if kind not in ("zip", "tar") or file_name.lower().endswith(".tgz"):
+        raise PortalError(
+            400,
+            "New submissions must be a structured .zip or .tar.gz archive "
+            "containing Participant_Model_Documentation.pdf and the NetCDF files.",
+            {"code": "archive_only"},
+        )
     metadata = metadata_from_payload(payload)
     requested_replacement = clean_text(payload.get("replace_upload_id"), 80)
     registered_profiles = participation_profiles_for_user(con, user["id"])
@@ -558,50 +565,27 @@ def handle_upload_start(con):
             if profile.get("participants")
         )[:1000]
 
-    # A v3 archive carries its own identity in its name, and it spans several
-    # experiments, so nothing here is retyped by the participant.
-    archive = parse_archive_name(file_name) if kind in ("zip", "tar") else None
-    if kind in ("zip", "tar"):
-        if not archive:
-            raise PortalError(
-                400,
-                "Archive name must be <INSTITUTE>-<MODEL>-<EVENT>-<POC>-"
-                "<CONFIG>-r<NN>.tar.gz, for example "
-                "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz. Fields must "
-                "be uppercase letters and digits without hyphens, so a model "
-                "such as WRF-ARW is written WRFARW.",
-                {"code": "archive_name"},
-            )
-        metadata["event"] = archive["event"]
-        metadata["model"] = archive["model"]
-        metadata["experiment"] = "(archive)"
+    # A structured archive carries its event and model in the archive name;
+    # configuration and revision details belong in Participant_Model_Documentation.pdf.
+    archive = parse_archive_name(file_name)
+    if not archive:
+        raise PortalError(
+            400,
+            "Archive name must be <INST>-<MODEL>-<EVENT>-<POC>.tar.gz or .zip, "
+            "for example HKUST-MPAS-HRAIN2025-SHI.tar.gz. Fields must be "
+            "uppercase letters and digits without hyphens, so a model such as "
+            "WRF-ARW is written WRFARW.",
+            {"code": "archive_name"},
+        )
+    metadata["event"] = archive["event"]
+    metadata["model"] = archive["model"]
+    metadata["experiment"] = "(archive)"
 
     if metadata["event"] not in constants_payload()["events"]:
         raise PortalError(400, "Select a valid RUMI event.")
     if not metadata["experiment"] or not metadata["model"]:
         raise PortalError(400, "Experiment and model are required.")
-    parsed = parse_rumi_filename(file_name) if kind == "netcdf" else None
-    if kind == "netcdf" and not parsed:
-        raise PortalError(
-            400,
-            "File name must follow <experiment>-<Model>-<Event>-"
-            "<YYYYMMDDHHMMSS>[_member][_rNN].nc, for example "
-            "ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc.",
-        )
-    if parsed:
-        comparisons = (
-            ("experiment", str.upper),
-            ("model", str.lower),
-            ("event", str.upper),
-        )
-        for field, normalize in comparisons:
-            submitted = metadata.get(field, "")
-            if submitted and normalize(parsed[field]) != normalize(submitted):
-                raise PortalError(
-                    400,
-                    f"File name {field} does not match the submitted metadata.",
-                )
-    timestamp_utc = parsed["timestamp"] if parsed else None
+    timestamp_utc = None
     inactive_placeholders = ", ".join("?" for _ in INACTIVE_UPLOAD_STATUSES)
     existing = con.execute(
         f"""

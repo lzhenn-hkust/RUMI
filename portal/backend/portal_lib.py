@@ -605,7 +605,7 @@ def file_kind(name):
         return "zip"
     if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
         return "tar"
-    raise PortalError(400, "Upload a .nc, .zip, .tar.gz, or .tgz file.")
+    raise PortalError(400, "Upload a .zip or .tar.gz structured archive.")
 
 
 def sha256_file(path):
