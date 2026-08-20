@@ -23,6 +23,8 @@ from portal_lib import (  # noqa: E402
     finalize_upload,
     log_exception,
     LOG_DIR,
+    PRIVATE_DIR_MODE,
+    PRIVATE_FILE_MODE,
     sha256_file,
     upload_record_public,
     utcnow,
@@ -39,13 +41,20 @@ HEARTBEAT_EVERY_SECONDS = 20.0
 def validation_slot():
     """Serialize archive validation so uploads cannot spawn unlimited ncdump work."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        LOG_DIR.chmod(PRIVATE_DIR_MODE)
+    except OSError:
+        pass
     fd = os.open(
         LOG_DIR / "validation.lock",
         os.O_RDWR | os.O_CREAT,
-        0o600,
+        PRIVATE_FILE_MODE,
     )
     try:
-        os.fchmod(fd, 0o600)
+        try:
+            os.fchmod(fd, PRIVATE_FILE_MODE)
+        except PermissionError:
+            pass
         lock = os.fdopen(fd, "a+", encoding="ascii")
     except Exception:
         os.close(fd)

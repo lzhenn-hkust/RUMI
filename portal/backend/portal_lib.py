@@ -101,6 +101,8 @@ MAX_ARCHIVE_EXPANDED_BYTES = MAX_UPLOAD_BYTES
 MAX_MANIFEST_BYTES = 1 * 1024 * 1024
 MAX_COMMAND_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_PENDING_VALIDATIONS = 8
+PRIVATE_DIR_MODE = 0o770
+PRIVATE_FILE_MODE = 0o660
 REGISTRATION_CODE_KEY = "registration_code"
 
 INACTIVE_UPLOAD_STATUSES = (
@@ -153,6 +155,10 @@ def ensure_dirs():
     try:
         for directory in (DATA_DIR, INCOMING_DIR, SUBMISSIONS_DIR, LOG_DIR):
             directory.mkdir(parents=True, exist_ok=True)
+            try:
+                directory.chmod(PRIVATE_DIR_MODE)
+            except OSError:
+                pass
     finally:
         os.umask(old_umask)
     data_htaccess = DATA_DIR / ".htaccess"
@@ -161,12 +167,19 @@ def ensure_dirs():
 
 
 def open_private_append(path):
-    """Open a runtime log or lock file with owner-only permissions."""
+    """Open a runtime text file with owner/group-only permissions."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        os.fchmod(fd, 0o600)
+        path.parent.chmod(PRIVATE_DIR_MODE)
+    except OSError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE_MODE)
+    try:
+        try:
+            os.fchmod(fd, PRIVATE_FILE_MODE)
+        except PermissionError:
+            pass
         return os.fdopen(fd, "a", encoding="utf-8")
     except Exception:
         os.close(fd)
@@ -174,12 +187,19 @@ def open_private_append(path):
 
 
 def open_private_binary_append(path):
-    """Open a private binary append stream with owner-only permissions."""
+    """Open a private binary append stream with owner/group-only permissions."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        os.fchmod(fd, 0o600)
+        path.parent.chmod(PRIVATE_DIR_MODE)
+    except OSError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE_MODE)
+    try:
+        try:
+            os.fchmod(fd, PRIVATE_FILE_MODE)
+        except PermissionError:
+            pass
         return os.fdopen(fd, "ab")
     except Exception:
         os.close(fd)
@@ -194,7 +214,7 @@ def connect_db():
     con.execute("PRAGMA foreign_keys = ON")
     init_schema(con)
     try:
-        DB_PATH.chmod(0o600)
+        DB_PATH.chmod(PRIVATE_FILE_MODE)
     except OSError:
         pass
     return con
