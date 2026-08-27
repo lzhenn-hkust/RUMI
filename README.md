@@ -66,7 +66,8 @@ Additional 2D and 3D fields are defined in `create_ncdf.py`.
 
 - Format: NetCDF4
 - Conventions: CF-1.8
-- Time: one timestamp per file, expressed in UTC
+- Time: exactly one timestamp per file, expressed in UTC; submit different
+  timestamps as separate NetCDF files
 - Compression: zlib
 - Missing value: `-9999.0`
 
@@ -151,7 +152,8 @@ HKUST-MPAS-HRAIN2025-SHI.tar.gz
         `-- Init-*/
 ```
 
-Each NetCDF member is checked with the portal's shared NetCDF validator.
+Each NetCDF member is checked with the portal's shared NetCDF validator,
+including the requirement that its `time` dimension contains exactly one step.
 Archive acceptance is all-or-nothing. Time fields and model
 configuration details are read from the NetCDF global attributes and the
 participant documentation, so they do not need to be entered in the upload

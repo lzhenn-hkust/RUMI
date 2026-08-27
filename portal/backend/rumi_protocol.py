@@ -912,7 +912,14 @@ def header_has_var(header, name):
 
 def header_dim(header, name):
     match = re.search(r"\b" + re.escape(name) + r"\s*=\s*(\d+)\s*;", header)
-    return int(match.group(1)) if match else None
+    if match:
+        return int(match.group(1))
+    unlimited = re.search(
+        r"\b" + re.escape(name) + r"\s*=\s*UNLIMITED\s*;\s*//\s*\((\d+)\s+currently\)",
+        header,
+        flags=re.IGNORECASE,
+    )
+    return int(unlimited.group(1)) if unlimited else None
 
 
 def header_attr(header, name):
@@ -1001,6 +1008,7 @@ def netcdf_facts_from_header(kind, header, coordinates):
             name for name in ALL_KNOWN_VARS if header_has_var(header, name)
         ),
         "dimensions": {
+            "time": header_dim(header, "time"),
             "lat": header_dim(header, "lat"),
             "lon": header_dim(header, "lon"),
         },
@@ -1103,12 +1111,24 @@ def validate_netcdf_facts(filename, facts, metadata=None):
     }
     summary["time_metadata"]["horizontal_resolution"] = attr("horizontal_resolution")
 
+    time = (facts.get("dimensions") or {}).get("time")
     lat = (facts.get("dimensions") or {}).get("lat")
     lon = (facts.get("dimensions") or {}).get("lon")
     summary["dimensions"] = {
+        "time": time,
         "lat": lat,
         "lon": lon,
     }
+    if time != 1:
+        if time is None:
+            errors.append(
+                "Each NetCDF file must define a time dimension with exactly one time step."
+            )
+        else:
+            errors.append(
+                "Each NetCDF file must contain exactly one time step "
+                f"(time dimension = 1); received {time}."
+            )
     if lat != CORE_GRID["nlat"] or lon != CORE_GRID["nlon"]:
         errors.append(
             "Standard core grid dimensions must be 171 lat by 234 lon "

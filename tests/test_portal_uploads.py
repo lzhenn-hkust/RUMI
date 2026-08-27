@@ -796,6 +796,49 @@ class NetcdfValidationTests(unittest.TestCase):
 
         self.assertIn("Missing core 2D variables: T2M", result["errors"])
 
+    def test_multiple_time_steps_are_rejected(self):
+        declarations = "\n".join(
+            f"float {name}(time, lat, lon) ;"
+            for name in portal_lib.CORE_2D_VARS
+        )
+        header = f"""
+        dimensions:
+            time = 2 ;
+            lat = 171 ;
+            lon = 234 ;
+        variables:
+            {declarations}
+        """
+        with (
+            mock.patch.object(portal_lib, "netcdf_kind", return_value="netCDF-4"),
+            mock.patch.object(portal_lib, "netcdf_header", return_value=header),
+            mock.patch.object(
+                portal_lib,
+                "netcdf_coordinates",
+                return_value=self.core_coordinates(),
+            ),
+        ):
+            result = portal_lib.validate_netcdf(
+                Path("multi-time.nc"),
+                "RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+                {
+                    "experiment": "RUMI-GFS-FC",
+                    "model": "MODEL",
+                    "event": "HRAIN2025",
+                },
+            )
+
+        self.assertIn(
+            "Each NetCDF file must contain exactly one time step "
+            "(time dimension = 1); received 2.",
+            result["errors"],
+        )
+
+    def test_unlimited_one_step_time_dimension_is_accepted(self):
+        header = "dimensions: time = UNLIMITED ; // (1 currently)"
+
+        self.assertEqual(portal_lib.header_dim(header, "time"), 1)
+
     def test_filename_metadata_mismatch_is_an_error(self):
         declarations = "\n".join(
             f"float {name}(time, lat, lon) ;"
