@@ -1,6 +1,6 @@
 # RUMI Portal Persistent Context
 
-Last verified: 2026-08-19
+Last verified: 2026-08-31
 
 ## Local Repository
 
@@ -65,7 +65,9 @@ later. Probe files were deleted afterwards.
 
 ## Web Portal Location
 
-- Public URL: `https://envf.ust.hk/dataview/test/lzn/RUMI/`
+- Production URL: `https://envf.ust.hk/dataview/RUMI/`
+- Legacy URL: `https://envf.ust.hk/dataview/test/lzn/RUMI/` (Apache 308
+  redirect to the production URL)
 - User-facing site path: `/home/lzhenn/RUMI/`
 - `/home/lzhenn/RUMI` is a symlink to `/home/dataop/data/nmodel/RUMI/`, which resolves to `/disk/rtbuf1/nmodel/RUMI` on `hqlx74`.
 - Web files are directly under the symlink target root. There is no `portal/` subdirectory on the server.
@@ -231,6 +233,23 @@ The SQLite database is the authoritative index. Institution is stored as a submi
 
 
 ## Deployment log
+
+- **2026-08-31** — RUMI protocol v3.2
+  (`RULES_VERSION: 2026-08-rumi-v3.2`) deployed from Git commit `6d805b6`.
+  Archive names now accept optional configuration and ensemble-member suffixes
+  in the fixed form
+  `<INST>-<MODEL>-<EVENT>-<POC>[-CONFIG<NN>][-MEM<NN>].tar.gz|zip`.
+  The API stores them in the existing `config_id` and `member` columns and
+  includes both in the derived analysis manifest. The old archive-wide limit
+  of 1500 NetCDF files was removed; the total archive member safety limit is
+  now 6000 and the 20 GiB compressed/expanded limits remain.
+  Verified after deploy: 145 local tests passed; production frontend and
+  backend parse all four optional-suffix combinations; SQLite
+  `integrity_check` is `ok` with 31 uploads / 4 users intact; participant
+  validator/template downloads match local SHA-256; the private tree returns
+  403; and the legacy URL redirects to production.
+  Backups: `/home/lzhenn/RUMI-code-backup-20260831-191625.tar.gz` and
+  `rumi_portal.sqlite3.backup-20260831-191625`.
 
 - **2026-08-19** — RUMI protocol v3 (`RULES_VERSION: 2026-08-rumi-v3`) deployed.
   Per-event archives, `Init-*` directories replacing `lead_NNNh`, background
