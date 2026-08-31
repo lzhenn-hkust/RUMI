@@ -1,6 +1,8 @@
+import io
 import json
 import sqlite3
 import sys
+import tarfile
 import tempfile
 import unittest
 from contextlib import ExitStack
@@ -29,6 +31,8 @@ class WorkerTests(unittest.TestCase):
         self.data_dir = Path(self.temp_dir.name)
         self.incoming_dir = self.data_dir / "incoming"
         self.submissions_dir = self.data_dir / "submissions"
+        self.extracted_dir = self.data_dir / "extracted"
+        self.manifests_dir = self.data_dir / "manifests"
         self.incoming_dir.mkdir()
         self.submissions_dir.mkdir()
 
@@ -37,6 +41,8 @@ class WorkerTests(unittest.TestCase):
             ("DATA_DIR", self.data_dir),
             ("INCOMING_DIR", self.incoming_dir),
             ("SUBMISSIONS_DIR", self.submissions_dir),
+            ("EXTRACTED_DIR", self.extracted_dir),
+            ("MANIFESTS_DIR", self.manifests_dir),
             ("LOG_DIR", self.data_dir / "logs"),
         ):
             self.patches.enter_context(mock.patch.object(portal_lib, name, value))
@@ -63,7 +69,16 @@ class WorkerTests(unittest.TestCase):
         self.con.close()
         self.temp_dir.cleanup()
 
-    def insert(self, upload_id, status="queued", content=b"archive-bytes"):
+    def archive_bytes(self, member_name="package/README.txt", content=b"archive"):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            info = tarfile.TarInfo(member_name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+        return buffer.getvalue()
+
+    def insert(self, upload_id, status="queued", content=None):
+        content = self.archive_bytes() if content is None else content
         temp_path = self.incoming_dir / f"{upload_id}.part"
         temp_path.write_bytes(content)
         self.con.execute(
@@ -71,11 +86,12 @@ class WorkerTests(unittest.TestCase):
             INSERT INTO uploads(
                 upload_id, user_id, institution, file_name, file_size,
                 received_bytes, file_kind, status, experiment, model, event,
-                metadata_json, temp_path, created_at, updated_at
+                member, config_id, metadata_json, temp_path, created_at, updated_at
             )
             VALUES (?, 1, 'HKUST',
-                    'HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz',
-                    ?, ?, 'tar', ?, '(archive)', 'MPAS', 'HRAIN2025', '{}', ?,
+                    'HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz',
+                    ?, ?, 'tar', ?, '(archive)', 'MPAS', 'HRAIN2025',
+                    'MEM01', 'CONFIG01', '{}', ?,
                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
             """,
             (upload_id, len(content), len(content), status, str(temp_path)),
@@ -114,6 +130,51 @@ class WorkerTests(unittest.TestCase):
         )
         self.assertEqual(row["rules_version"], portal_lib.RULES_VERSION)
         self.assertIsNone(row["worker_pid"])
+        self.assertEqual(row["extraction_status"], "ready")
+        self.assertEqual(row["extracted_files"], 1)
+        self.assertTrue(Path(row["extracted_path"]).joinpath("package/README.txt").exists())
+        manifest = json.loads(Path(row["manifest_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["archive"]["config_id"], "CONFIG01")
+        self.assertEqual(manifest["archive"]["member"], "MEM01")
+
+    def test_extraction_failure_keeps_original_archive(self):
+        self.insert("archive", content=b"not-an-archive")
+        with mock.patch.object(validate_worker, "validate_archive", return_value=dict(CLEAN)):
+            self.assertEqual(validate_worker.validate_upload("archive"), 1)
+
+        row = self.row("archive")
+        self.assertEqual(row["status"], "validated")
+        self.assertEqual(row["extraction_status"], "failed")
+        self.assertIn("analysis copy", row["extraction_error"])
+        self.assertTrue(Path(row["stored_path"]).exists())
+
+    def test_extraction_rejects_path_traversal(self):
+        self.insert("archive", content=self.archive_bytes("../escape.txt"))
+        with mock.patch.object(validate_worker, "validate_archive", return_value=dict(CLEAN)):
+            self.assertEqual(validate_worker.validate_upload("archive"), 1)
+
+        row = self.row("archive")
+        self.assertEqual(row["extraction_status"], "failed")
+        self.assertFalse((self.data_dir / "escape.txt").exists())
+
+    def test_extraction_enforces_total_member_limit(self):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            for name in ("package/one.txt", "package/two.txt"):
+                info = tarfile.TarInfo(name)
+                info.size = 1
+                archive.addfile(info, io.BytesIO(b"x"))
+        self.insert("archive", content=buffer.getvalue())
+
+        with (
+            mock.patch.object(validate_worker, "validate_archive", return_value=dict(CLEAN)),
+            mock.patch.object(portal_lib, "MAX_ARCHIVE_MEMBERS", 1),
+        ):
+            self.assertEqual(validate_worker.validate_upload("archive"), 1)
+
+        row = self.row("archive")
+        self.assertEqual(row["extraction_status"], "failed")
+        self.assertTrue(Path(row["stored_path"]).exists())
 
     def test_rejected_archive_is_not_stored(self):
         temp_path = self.insert("archive")

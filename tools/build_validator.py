@@ -130,7 +130,7 @@ except Exception:  # pragma: no cover - exercised only without the package
 
 CLI_CODE = '''
 # ---------------------------------------------------------------------------
-# CLI: reads files (directory tree or .tar.gz/.tgz/.zip archive) and NetCDF
+# CLI: reads files (directory tree or .tar.gz/.zip archive) and NetCDF
 # metadata (via netCDF4 or ncdump), then formats a report. Every pass/fail
 # judgement below is delegated to the inlined functions above -- this
 # section never decides on its own whether a submission is valid.
@@ -201,7 +201,7 @@ def _open_archive_source(path):
     lower = str(path).lower()
     if lower.endswith(".zip"):
         return _ZipSource(path)
-    if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
+    if lower.endswith(".tar.gz"):
         return _TarSource(path)
     raise ValueError(f"unsupported archive type: {path}")
 
@@ -241,7 +241,7 @@ def _resolve_target(target_path):
         return "directory", names, f"{stem}.tar.gz", local_path, (lambda: None)
 
     lower = str(target_path).lower()
-    if target_path.is_file() and lower.endswith((".tar.gz", ".tgz", ".zip")):
+    if target_path.is_file() and lower.endswith((".tar.gz", ".zip")):
         source = _open_archive_source(target_path)
         names = sorted(source.names())
 
@@ -273,6 +273,7 @@ def _facts_via_netcdf4(path):
                 attributes[name] = None
         variables = sorted(name for name in ALL_KNOWN_VARS if name in ds.variables)
         dimensions = {
+            "time": len(ds.dimensions["time"]) if "time" in ds.dimensions else None,
             "lat": len(ds.dimensions["lat"]) if "lat" in ds.dimensions else None,
             "lon": len(ds.dimensions["lon"]) if "lon" in ds.dimensions else None,
         }
@@ -554,7 +555,7 @@ def run(args):
     if kind is None:
         print(
             f"error: {target_path} is neither a directory nor a "
-            f".tar.gz/.tgz/.zip archive.",
+            f".tar.gz/.zip archive.",
             file=sys.stderr,
         )
         return 2
@@ -699,13 +700,13 @@ def _build_parser():
         prog="rumi_validate.py",
         description=(
             "Validate a RUMI v3 submission (an extracted directory, or a "
-            ".tar.gz/.tgz/.zip archive) against the same rules the portal "
+            ".tar.gz/.zip archive) against the same rules the portal "
             "uses, so problems can be found and fixed before uploading."
         ),
     )
     parser.add_argument(
         "path",
-        help="Path to an extracted submission directory, or a .tar.gz/.tgz/.zip archive.",
+        help="Path to an extracted submission directory, or a .tar.gz/.zip archive.",
     )
     parser.add_argument(
         "--write-manifest",

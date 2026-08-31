@@ -1,6 +1,6 @@
 # RUMI Phase 1 Submission Specification v3
 
-    RULES_VERSION: 2026-08-rumi-v3
+    RULES_VERSION: 2026-08-rumi-v3.2
     Status:        agreed in principle; open items listed in section 10
     Supersedes:    the `lead_NNNh` archive layout described in README.md before this version
 
@@ -13,7 +13,7 @@ tables below. If any other document disagrees with this one, this one wins.
 
 ## 1. Submission unit
 
-**One archive = one event x one model configuration x one version.**
+**One archive = one event x one model, with optional configuration and ensemble member.**
 
 A participant who runs three events with one configuration submits three
 archives. A participant who runs the same event with two different
@@ -31,13 +31,13 @@ extraction of the configuration identity.
 ## 2. Archive name
 
 ```
-<INSTITUTE>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>.tar.gz
+<INSTITUTE>-<MODEL>-<EVENT>-<POC>[-CONFIG<NN>][-MEM<NN>].tar.gz
 ```
 
 Example:
 
 ```
-HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
+HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz
 ```
 
 | Token | Meaning | Charset |
@@ -46,18 +46,18 @@ HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
 | `MODEL` | Model identifier | `[A-Z0-9]+` |
 | `EVENT` | Event code from section 3 | fixed list |
 | `POC` | Surname of the point of contact | `[A-Z0-9]+` |
-| `CONFIG` | Configuration identifier, participant-chosen | `[A-Z0-9]+` |
-| `NN` | Two-or-more-digit version, starting at `01` | `[0-9]{2,}` |
+| `CONFIG<NN>` | Optional configuration identifier, such as `CONFIG01` | `CONFIG[0-9]{2,}` |
+| `MEM<NN>` | Optional ensemble member, such as `MEM01` | `MEM[0-9]{2,}` |
 
-Accepted extensions: `.tar.gz`, `.tgz`, `.zip`.
+Accepted extensions: `.tar.gz`, `.zip`. When both optional suffixes are used,
+`CONFIG<NN>` comes before `MEM<NN>`.
 
 **Tokens must not contain hyphens**, because the hyphen is the field separator.
 A model whose name contains a hyphen or a space is written without it:
 `WRF-ARW` becomes `WRFARW`. This matches the existing rule for NetCDF filenames.
 
-The version is incremented for a corrected resubmission of the same
-event/configuration. The portal also supports explicit replacement, which marks
-the previous submission `superseded` rather than deleting it.
+The portal supports explicit replacement, which marks the previous submission
+`superseded` rather than deleting it.
 
 ## 3. Events
 
@@ -72,8 +72,8 @@ the previous submission `superseded` rather than deleting it.
 ## 4. Directory structure
 
 ```
-HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
-`-- HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/     <- top directory == archive name without extension
+HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz
+`-- HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/     <- top directory == archive name without extension
     |-- Participant_Model_Documentation.pdf
     |-- rumi_manifest.json                          <- written by rumi_validate.py, optional
     |
@@ -300,5 +300,9 @@ These need group confirmation before the participant instructions are final.
   does not cancel it.
 - Structural problems (naming, directory layout) are reported within seconds,
   before any per-file work begins.
+- After an archive passes validation, the original archive is retained as the
+  immutable source of truth. The server then creates a private analysis copy
+  and a server-generated manifest; the Submissions view reports whether that
+  copy is `queued`, `extracting`, `ready`, or `failed`.
 - Running `rumi_validate.py` locally before packaging avoids nearly all of this
   round trip.

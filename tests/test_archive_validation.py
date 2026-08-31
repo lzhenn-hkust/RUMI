@@ -19,7 +19,7 @@ import rumi_protocol  # noqa: E402
 # Fixtures shared across the three test groups below.
 # ---------------------------------------------------------------------------
 
-STEM = "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01"
+STEM = "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01"
 ARCHIVE_NAME = f"{STEM}.zip"
 EXPERIMENT = "ERA5-AN"
 MODEL = "MPAS"
@@ -131,7 +131,7 @@ class ArchiveStructureTests(RumiTestCase):
 
         self.assert_message(
             result["errors"],
-            "Archive name must be <INSTITUTE>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>",
+            "Archive name must be <INST>-<MODEL>-<EVENT>-<POC>",
         )
 
     def test_hyphen_in_model_token_is_rejected(self):
@@ -141,7 +141,7 @@ class ArchiveStructureTests(RumiTestCase):
 
         self.assert_message(
             result["errors"],
-            "Archive name must be <INSTITUTE>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>",
+            "Archive name must be <INST>-<MODEL>-<EVENT>-<POC>",
         )
 
     def test_lead_directory_is_rejected(self):
@@ -525,6 +525,27 @@ class ArchiveFlowTests(RumiTestCase):
 
         self.assertEqual(result["errors"], [])
         self.assertEqual(calls[-1], (len(KM_SERIES), len(KM_SERIES)))
+
+    def test_more_than_1500_netcdf_files_reaches_validation(self):
+        first_stamp = stamp_from_iso(KM_SERIES[0])
+        extra_count = 1501 - len(KM_SERIES)
+        extra_members = []
+        for index in range(extra_count):
+            name = (
+                f"ERA5-AN-{MODEL}-{EVENT}-{first_stamp}_member{index:04d}.nc"
+            )
+            extra_members.append(
+                (f"{STEM}/{EXPERIMENT}/Init-0/{name}", b"fake netcdf bytes")
+            )
+
+        result, validator = self.run_validate_archive(extra_members=extra_members)
+
+        self.assertEqual(result["summary"]["netcdf_files"], 1501)
+        self.assertEqual(validator.call_count, 1501)
+        self.assertFalse(
+            any("1500 NetCDF" in message for message in result["errors"]),
+            result["errors"],
+        )
 
     def test_summary_reports_experiments_and_inits(self):
         result, _ = self.run_validate_archive()

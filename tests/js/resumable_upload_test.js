@@ -167,6 +167,26 @@ const app = require(appPath);
 function testPureFunctions() {
   console.log("\n=== Pure function checks ===");
 
+  app.state.constants = {
+    archive_name_pattern: "^([A-Z0-9]+)-([A-Z0-9]+)-(HRAIN2025)-([A-Z0-9]+)(?:-(CONFIG\\d{2,}))?(?:-(MEM\\d{2,}))?\\.(tar\\.gz|zip)$",
+  };
+  assert.deepStrictEqual(
+    app.parseArchiveName("HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz"),
+    {
+      institution: "HKUST",
+      model: "MPAS",
+      event: "HRAIN2025",
+      poc: "LIU",
+      config: "CONFIG01",
+      member: "MEM01",
+    },
+  );
+  assert.strictEqual(
+    app.parseArchiveName("HKUST-MPAS-HRAIN2025-LIU-MEM01-CONFIG01.zip"),
+    null,
+  );
+  console.log("parseArchiveName optional CONFIG/MEM fields OK");
+
   const file = {name: "RUMI-TEST-AN-WRF-EVT1-20200101000000.nc", size: 123456, lastModified: 1700000000000};
   const key = app.uploadStorageKey(file);
   assert.strictEqual(key, `rumi.upload.v1.${file.name}.123456.1700000000000`);

@@ -4,7 +4,7 @@
 Builds a directory tree (and, optionally, a packaged ``.tar.gz``/``.tgz``/
 ``.zip`` archive) that mimics what a participant would upload:
 
-    <INST>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>/
+    <INST>-<MODEL>-<EVENT>-<POC>[-CONFIG<NN>][-MEM<NN>]/
         Participant_Model_Documentation.pdf
         ERA5-AN/
             Init-0/
@@ -342,7 +342,7 @@ def make_fixture(
             "root": Path,             # OUTDIR/<stem>/  (always created)
             "archive": Path | None,   # OUTDIR/<stem>.<ext>, or None if
                                        # archive == "none"
-            "stem": str,               # "<INST>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>"
+            "stem": str,               # "<INST>-<MODEL>-<EVENT>-<POC>-<CONFIG>"
             "archive_name": str,       # stem + canonical extension
             "doc": Path | None,        # Participant_Model_Documentation.pdf, or None
             "meta_path": Path,         # OUTDIR/_fixture_meta.json
@@ -382,7 +382,7 @@ def make_fixture(
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    stem = f"{institution}-{model}-{event}-{poc}-{config}-r{version}"
+    stem = f"{institution}-{model}-{event}-{poc}-{config}"
     root = outdir / stem
     if root.exists():
         shutil.rmtree(root)

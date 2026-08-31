@@ -136,51 +136,56 @@ class RequiredPeriodTests(unittest.TestCase):
 
 
 class ArchiveNameTests(unittest.TestCase):
-    def test_parse_archive_name_accepts_agreed_form(self):
-        parsed = rumi_protocol.parse_archive_name(
-            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz"
-        )
-        self.assertIsNotNone(parsed)
-        self.assertEqual(parsed["institution"], "HKUST")
-        self.assertEqual(parsed["model"], "MPAS")
-        self.assertEqual(parsed["event"], "HRAIN2025")
-        self.assertEqual(parsed["poc"], "LIU")
-        self.assertEqual(parsed["config"], "CONFIG01")
-        self.assertEqual(parsed["version"], "01")
-        self.assertEqual(parsed["extension"], "tar.gz")
-        self.assertEqual(
-            parsed["stem"], "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01"
-        )
+    def test_parse_archive_name_accepts_optional_config_and_member(self):
+        cases = {
+            "HKUST-MPAS-HRAIN2025-LIU.tar.gz": ("", ""),
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01.tar.gz": ("CONFIG01", ""),
+            "HKUST-MPAS-HRAIN2025-LIU-MEM01.zip": ("", "MEM01"),
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz": (
+                "CONFIG01",
+                "MEM01",
+            ),
+        }
+        for name, (config, member) in cases.items():
+            with self.subTest(name=name):
+                parsed = rumi_protocol.parse_archive_name(name)
+                self.assertIsNotNone(parsed)
+                self.assertEqual(parsed["institution"], "HKUST")
+                self.assertEqual(parsed["model"], "MPAS")
+                self.assertEqual(parsed["event"], "HRAIN2025")
+                self.assertEqual(parsed["poc"], "LIU")
+                self.assertEqual(parsed["config"], config)
+                self.assertEqual(parsed["member"], member)
+                self.assertEqual(parsed["version"], "")
 
     def test_parse_archive_name_rejects_bad_forms(self):
         bad_names = [
-            "HKUST-MPAS-HRAIN2025-CONFIG01-r01.tar.gz",  # missing POC
-            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01.tar.gz",  # missing version
-            "HKUST-WRF-ARW-HRAIN2025-LIU-CONFIG01-r01.tar.gz",  # hyphenated token
-            "HKUST-MPAS-NOSUCHEVENT-LIU-CONFIG01-r01.tar.gz",  # unknown event
-            "hkust-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz",  # lowercase token
+            "HKUST-MPAS-HRAIN2025.tar.gz",  # missing POC
+            "HKUST-MPAS-HRAIN2025-LIU-MEM01-CONFIG01.tar.gz",  # wrong order
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG1.tar.gz",  # short config number
+            "HKUST-MPAS-HRAIN2025-LIU-MEMBER01.tar.gz",  # wrong member prefix
+            "HKUST-WRF-ARW-HRAIN2025-LIU.tar.gz",  # hyphenated token
+            "HKUST-MPAS-NOSUCHEVENT-LIU.tar.gz",  # unknown event
+            "hkust-MPAS-HRAIN2025-LIU.tar.gz",  # lowercase token
+            "HKUST-MPAS-HRAIN2025-LIU.tgz",  # unsupported extension
         ]
         for name in bad_names:
             with self.subTest(name=name):
                 self.assertIsNone(rumi_protocol.parse_archive_name(name))
 
-    def test_parse_archive_name_accepts_zip_and_tgz(self):
+    def test_parse_archive_name_accepts_zip_and_tar_gz(self):
         zip_parsed = rumi_protocol.parse_archive_name(
-            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.zip"
+            "HKUST-MPAS-HRAIN2025-LIU-MEM02.zip"
         )
-        tgz_parsed = rumi_protocol.parse_archive_name(
-            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tgz"
+        tar_parsed = rumi_protocol.parse_archive_name(
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG02.tar.gz"
         )
         self.assertIsNotNone(zip_parsed)
         self.assertEqual(zip_parsed["extension"], "zip")
-        self.assertEqual(
-            zip_parsed["stem"], "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01"
-        )
-        self.assertIsNotNone(tgz_parsed)
-        self.assertEqual(tgz_parsed["extension"], "tgz")
-        self.assertEqual(
-            tgz_parsed["stem"], "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01"
-        )
+        self.assertEqual(zip_parsed["stem"], "HKUST-MPAS-HRAIN2025-LIU-MEM02")
+        self.assertIsNotNone(tar_parsed)
+        self.assertEqual(tar_parsed["extension"], "tar.gz")
+        self.assertEqual(tar_parsed["stem"], "HKUST-MPAS-HRAIN2025-LIU-CONFIG02")
 
 
 class ResolutionCategoryTests(unittest.TestCase):
@@ -272,6 +277,7 @@ def make_compliant_facts():
         "attributes": attributes,
         "variables": variables,
         "dimensions": {
+            "time": 1,
             "lat": rumi_protocol.CORE_GRID["nlat"],
             "lon": rumi_protocol.CORE_GRID["nlon"],
         },
@@ -329,6 +335,16 @@ class ValidateNetcdfFactsTests(unittest.TestCase):
         )
         self.assertEqual(result["errors"], [])
         self.assertEqual(result["warnings"], [])
+
+    def test_each_file_must_contain_one_time_step(self):
+        for time_size in (None, 2):
+            with self.subTest(time_size=time_size):
+                facts = make_compliant_facts()
+                facts["dimensions"]["time"] = time_size
+                result = rumi_protocol.validate_netcdf_facts(
+                    COMPLIANT_FACTS_FILENAME, facts
+                )
+                self.assert_message(result["errors"], "exactly one time step")
 
     def test_missing_radiation_variable_is_a_warning(self):
         # Radiation variables are recommended, not required: a submission

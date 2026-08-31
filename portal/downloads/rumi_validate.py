@@ -60,7 +60,7 @@ except Exception:  # pragma: no cover - exercised only without the package
 # tools/build_validator.py.
 # ============================================================================
 
-"""Shared RUMI submission protocol rules (v3).
+"""Shared RUMI submission protocol rules (v3.2).
 
 This module is the single source of truth for the RUMI event calendar,
 required submission time coverage, initialization-time labels, experiment
@@ -86,7 +86,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-RULES_VERSION = "2026-08-rumi-v3"
+RULES_VERSION = "2026-08-rumi-v3.2"
 OUTPUT_INTERVAL_HOURS = 1
 
 # ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ RUMI_FILENAME_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Archive / directory naming (v3 submission structure).
+# Archive / directory naming (v3.2 submission structure).
 # ---------------------------------------------------------------------------
 # Tokens use [A-Z0-9]+ (uppercase letters and digits only): a hyphen is a
 # field separator, so it cannot appear inside a token (e.g. "WRF-ARW" must
@@ -398,7 +398,7 @@ RUMI_FILENAME_RE = re.compile(
 ARCHIVE_NAME_RE = re.compile(
     r"^([A-Z0-9]+)-([A-Z0-9]+)-("
     + "|".join(EVENTS.keys())
-    + r")-([A-Z0-9]+)-([A-Z0-9]+)-r(\d{2,})\.(tar\.gz|tgz|zip)$"
+    + r")-([A-Z0-9]+)(?:-(CONFIG\d{2,}))?(?:-(MEM\d{2,}))?\.(tar\.gz|zip)$"
 )
 ARCHIVE_NAME_PATTERN = ARCHIVE_NAME_RE.pattern
 
@@ -429,28 +429,30 @@ def iso_z(moment: dt.datetime) -> str:
 
 
 def parse_archive_name(name: str) -> Optional[Dict[str, str]]:
-    """Parse a v3 archive file name.
+    """Parse a v3.2 archive file name.
 
     Expected form:
-    ``<INSTITUTION>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>.(tar.gz|tgz|zip)``
+    ``<INST>-<MODEL>-<EVENT>-<POC>[-CONFIG<NN>][-MEM<NN>].(tar.gz|zip)``
 
     Returns a dict with keys ``institution``, ``model``, ``event``, ``poc``,
-    ``config``, ``version``, ``extension``, ``stem`` (the archive name with
+    ``config``, ``member``, ``version``, ``extension``, ``stem`` (``version``
+    is retained as an empty compatibility value), with
     its extension removed, e.g. ``.tar.gz`` is removed as a whole, not just
     ``.gz``), or ``None`` if ``name`` does not match.
     """
     match = ARCHIVE_NAME_RE.match(name or "")
     if not match:
         return None
-    institution, model, event, poc, config, version, extension = match.groups()
+    institution, model, event, poc, config, member, extension = match.groups()
     stem = name[: -(len(extension) + 1)]
     return {
         "institution": institution,
         "model": model,
         "event": event,
         "poc": poc,
-        "config": config,
-        "version": version,
+        "config": config or "",
+        "member": member or "",
+        "version": "",
         "extension": extension,
         "stem": stem,
     }
@@ -615,7 +617,7 @@ def archive_stem(filename):
     if parsed:
         return parsed["stem"]
     lower = filename.lower()
-    for extension in (".tar.gz", ".tgz", ".zip"):
+    for extension in (".tar.gz", ".zip"):
         if lower.endswith(extension):
             return filename[: -len(extension)]
     return filename
@@ -685,9 +687,9 @@ def validate_archive_structure(names, filename):
     summary["archive"] = archive
     if not archive:
         errors.add(
-            "Archive name must be <INSTITUTE>-<MODEL>-<EVENT>-<POC>-"
-            "<CONFIG>-r<NN>.tar.gz, for example "
-            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz. Fields must be "
+            "Archive name must be <INST>-<MODEL>-<EVENT>-<POC>"
+            "[-CONFIG<NN>][-MEM<NN>].tar.gz or .zip, for example "
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz. Fields must be "
             "uppercase letters and digits without hyphens, so a model such as "
             "WRF-ARW is written WRFARW."
         )
@@ -973,7 +975,14 @@ def header_has_var(header, name):
 
 def header_dim(header, name):
     match = re.search(r"\b" + re.escape(name) + r"\s*=\s*(\d+)\s*;", header)
-    return int(match.group(1)) if match else None
+    if match:
+        return int(match.group(1))
+    unlimited = re.search(
+        r"\b" + re.escape(name) + r"\s*=\s*UNLIMITED\s*;\s*//\s*\((\d+)\s+currently\)",
+        header,
+        flags=re.IGNORECASE,
+    )
+    return int(unlimited.group(1)) if unlimited else None
 
 
 def header_attr(header, name):
@@ -1062,6 +1071,7 @@ def netcdf_facts_from_header(kind, header, coordinates):
             name for name in ALL_KNOWN_VARS if header_has_var(header, name)
         ),
         "dimensions": {
+            "time": header_dim(header, "time"),
             "lat": header_dim(header, "lat"),
             "lon": header_dim(header, "lon"),
         },
@@ -1164,12 +1174,24 @@ def validate_netcdf_facts(filename, facts, metadata=None):
     }
     summary["time_metadata"]["horizontal_resolution"] = attr("horizontal_resolution")
 
+    time = (facts.get("dimensions") or {}).get("time")
     lat = (facts.get("dimensions") or {}).get("lat")
     lon = (facts.get("dimensions") or {}).get("lon")
     summary["dimensions"] = {
+        "time": time,
         "lat": lat,
         "lon": lon,
     }
+    if time != 1:
+        if time is None:
+            errors.append(
+                "Each NetCDF file must define a time dimension with exactly one time step."
+            )
+        else:
+            errors.append(
+                "Each NetCDF file must contain exactly one time step "
+                f"(time dimension = 1); received {time}."
+            )
     if lat != CORE_GRID["nlat"] or lon != CORE_GRID["nlon"]:
         errors.append(
             "Standard core grid dimensions must be 171 lat by 234 lon "
@@ -1237,7 +1259,7 @@ def validate_netcdf_facts(filename, facts, metadata=None):
 # ============================================================================
 
 # ---------------------------------------------------------------------------
-# CLI: reads files (directory tree or .tar.gz/.tgz/.zip archive) and NetCDF
+# CLI: reads files (directory tree or .tar.gz/.zip archive) and NetCDF
 # metadata (via netCDF4 or ncdump), then formats a report. Every pass/fail
 # judgement below is delegated to the inlined functions above -- this
 # section never decides on its own whether a submission is valid.
@@ -1308,7 +1330,7 @@ def _open_archive_source(path):
     lower = str(path).lower()
     if lower.endswith(".zip"):
         return _ZipSource(path)
-    if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
+    if lower.endswith(".tar.gz"):
         return _TarSource(path)
     raise ValueError(f"unsupported archive type: {path}")
 
@@ -1348,7 +1370,7 @@ def _resolve_target(target_path):
         return "directory", names, f"{stem}.tar.gz", local_path, (lambda: None)
 
     lower = str(target_path).lower()
-    if target_path.is_file() and lower.endswith((".tar.gz", ".tgz", ".zip")):
+    if target_path.is_file() and lower.endswith((".tar.gz", ".zip")):
         source = _open_archive_source(target_path)
         names = sorted(source.names())
 
@@ -1380,6 +1402,7 @@ def _facts_via_netcdf4(path):
                 attributes[name] = None
         variables = sorted(name for name in ALL_KNOWN_VARS if name in ds.variables)
         dimensions = {
+            "time": len(ds.dimensions["time"]) if "time" in ds.dimensions else None,
             "lat": len(ds.dimensions["lat"]) if "lat" in ds.dimensions else None,
             "lon": len(ds.dimensions["lon"]) if "lon" in ds.dimensions else None,
         }
@@ -1661,7 +1684,7 @@ def run(args):
     if kind is None:
         print(
             f"error: {target_path} is neither a directory nor a "
-            f".tar.gz/.tgz/.zip archive.",
+            f".tar.gz/.zip archive.",
             file=sys.stderr,
         )
         return 2
@@ -1806,13 +1829,13 @@ def _build_parser():
         prog="rumi_validate.py",
         description=(
             "Validate a RUMI v3 submission (an extracted directory, or a "
-            ".tar.gz/.tgz/.zip archive) against the same rules the portal "
+            ".tar.gz/.zip archive) against the same rules the portal "
             "uses, so problems can be found and fixed before uploading."
         ),
     )
     parser.add_argument(
         "path",
-        help="Path to an extracted submission directory, or a .tar.gz/.tgz/.zip archive.",
+        help="Path to an extracted submission directory, or a .tar.gz/.zip archive.",
     )
     parser.add_argument(
         "--write-manifest",

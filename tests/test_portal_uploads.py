@@ -1,6 +1,7 @@
 import importlib.machinery
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -26,6 +27,18 @@ portal_api = importlib.util.module_from_spec(spec)
 loader.exec_module(portal_api)
 
 
+class CookiePathTests(unittest.TestCase):
+    def test_root_mount_uses_one_slash(self):
+        with mock.patch.dict(os.environ, {"SCRIPT_NAME": "/api.cgi"}):
+            self.assertEqual(portal_api.cookie_path(), "/")
+
+    def test_nested_mount_keeps_trailing_slash(self):
+        with mock.patch.dict(
+            os.environ, {"SCRIPT_NAME": "/dataview/RUMI/api.cgi"}
+        ):
+            self.assertEqual(portal_api.cookie_path(), "/dataview/RUMI/")
+
+
 class UploadWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -36,19 +49,21 @@ class UploadWorkflowTests(unittest.TestCase):
         self.submissions_dir.mkdir()
 
         self.patches = ExitStack()
-        for module in (portal_api, portal_lib):
-            self.patches.enter_context(
-                mock.patch.object(module, "DATA_DIR", self.data_dir)
-            )
-            self.patches.enter_context(
-                mock.patch.object(module, "INCOMING_DIR", self.incoming_dir)
-            )
-            self.patches.enter_context(
-                mock.patch.object(module, "SUBMISSIONS_DIR", self.submissions_dir)
-            )
-            self.patches.enter_context(
-                mock.patch.object(module, "LOG_DIR", self.data_dir / "logs")
-            )
+        self.patches.enter_context(
+            mock.patch.object(portal_api, "INCOMING_DIR", self.incoming_dir)
+        )
+        self.patches.enter_context(
+            mock.patch.object(portal_api, "LOG_DIR", self.data_dir / "logs")
+        )
+        for name, value in (
+            ("DATA_DIR", self.data_dir),
+            ("INCOMING_DIR", self.incoming_dir),
+            ("SUBMISSIONS_DIR", self.submissions_dir),
+            ("LOG_DIR", self.data_dir / "logs"),
+            ("EXTRACTED_DIR", self.data_dir / "extracted"),
+            ("MANIFESTS_DIR", self.data_dir / "manifests"),
+        ):
+            self.patches.enter_context(mock.patch.object(portal_lib, name, value))
 
         self.con = sqlite3.connect(":memory:")
         self.con.row_factory = sqlite3.Row
@@ -161,13 +176,15 @@ class UploadWorkflowTests(unittest.TestCase):
         self.assertIsNone(result["upload"].get("stored_path"))
 
     def test_same_filename_requires_explicit_replacement(self):
-        self.insert_upload("existing-upload", "validated")
+        self.insert_upload(
+            "existing-upload",
+            "validated",
+            file_name="HKUST-MODEL-HRAIN2025-MODELER.zip",
+            file_kind="zip",
+        )
         payload = {
-            "file_name": "GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+            "file_name": "HKUST-MODEL-HRAIN2025-MODELER.zip",
             "file_size": 123,
-            "experiment": "GFS-FC",
-            "model": "MODEL",
-            "event": "HRAIN2025",
         }
 
         with mock.patch.object(portal_api, "read_json", return_value=payload):
@@ -195,19 +212,16 @@ class UploadWorkflowTests(unittest.TestCase):
                 metadata_json, temp_path, created_at, updated_at
             )
             VALUES ('partial-upload', 1, 'HKUST',
-                    'GFS-FC-MODEL-HRAIN2025-20250804000000.nc',
-                    1000, 400, 'netcdf', 'receiving', 'GFS-FC', 'MODEL',
+                    'HKUST-MODEL-HRAIN2025-MODELER.zip',
+                    1000, 400, 'zip', 'receiving', '(archive)', 'MODEL',
                     'HRAIN2025', '{}', '/tmp/partial.part',
                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
             """
         )
         self.con.commit()
         payload = {
-            "file_name": "GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+            "file_name": "HKUST-MODEL-HRAIN2025-MODELER.zip",
             "file_size": 1000,
-            "experiment": "GFS-FC",
-            "model": "MODEL",
-            "event": "HRAIN2025",
         }
         with mock.patch.object(portal_api, "read_json", return_value=payload):
             with self.assertRaises(portal_lib.PortalError) as raised:
@@ -220,13 +234,15 @@ class UploadWorkflowTests(unittest.TestCase):
         )
 
     def test_completed_upload_is_still_a_duplicate_not_a_resume(self):
-        self.insert_upload("existing-upload", "validated")
+        self.insert_upload(
+            "existing-upload",
+            "validated",
+            file_name="HKUST-MODEL-HRAIN2025-MODELER.zip",
+            file_kind="zip",
+        )
         payload = {
-            "file_name": "GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+            "file_name": "HKUST-MODEL-HRAIN2025-MODELER.zip",
             "file_size": 123,
-            "experiment": "GFS-FC",
-            "model": "MODEL",
-            "event": "HRAIN2025",
         }
         with mock.patch.object(portal_api, "read_json", return_value=payload):
             with self.assertRaises(portal_lib.PortalError) as raised:
@@ -238,7 +254,7 @@ class UploadWorkflowTests(unittest.TestCase):
         # The participant retypes nothing: identity comes from the archive name
         # and from the authenticated account.
         payload = {
-            "file_name": "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz",
+            "file_name": "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz",
             "file_size": 123,
         }
 
@@ -248,7 +264,7 @@ class UploadWorkflowTests(unittest.TestCase):
         row = self.con.execute(
             """
             SELECT file_kind, institution, model, event, experiment, poc,
-                   config_id, archive_version, metadata_json
+                   config_id, member, archive_version, metadata_json
             FROM uploads WHERE upload_id = ?
             """,
             (result["upload_id"],),
@@ -260,10 +276,27 @@ class UploadWorkflowTests(unittest.TestCase):
         self.assertEqual(row["experiment"], "(archive)")
         self.assertEqual(row["poc"], "LIU")
         self.assertEqual(row["config_id"], "CONFIG01")
-        self.assertEqual(row["archive_version"], "01")
+        self.assertEqual(row["member"], "MEM01")
+        self.assertEqual(row["archive_version"], "")
         metadata = json.loads(row["metadata_json"])
-        self.assertEqual(metadata["simulation_start_time"], "")
-        self.assertEqual(metadata["forecast_lead_time_hours"], "")
+        self.assertEqual(metadata["config_id"], "CONFIG01")
+        self.assertEqual(metadata["member"], "MEM01")
+
+    def test_archive_name_accepts_each_optional_suffix_combination(self):
+        names = (
+            "HKUST-MPAS-HRAIN2025-LIU.zip",
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG02.zip",
+            "HKUST-MPAS-HRAIN2025-LIU-MEM02.zip",
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG02-MEM02.zip",
+        )
+        for name in names:
+            with self.subTest(name=name), mock.patch.object(
+                portal_api,
+                "read_json",
+                return_value={"file_name": name, "file_size": 123},
+            ):
+                result = portal_api.handle_upload_start(self.con)
+                self.assertTrue(result["ok"])
 
     def test_bad_archive_name_is_rejected_with_an_example(self):
         payload = {"file_name": "submission.tar.gz", "file_size": 123}
@@ -275,13 +308,13 @@ class UploadWorkflowTests(unittest.TestCase):
         self.assertEqual(raised.exception.status, 400)
         self.assertEqual(raised.exception.details["code"], "archive_name")
         self.assertIn(
-            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz",
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz",
             raised.exception.message,
         )
 
     def test_hyphenated_model_in_archive_name_is_rejected(self):
         payload = {
-            "file_name": "HKUST-WRF-ARW-HRAIN2025-LIU-CONFIG01-r01.tar.gz",
+            "file_name": "HKUST-WRF-ARW-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz",
             "file_size": 123,
         }
 
@@ -380,7 +413,7 @@ class UploadWorkflowTests(unittest.TestCase):
             "archive-upload",
             "receiving",
             content=b"archive",
-            file_name="HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.zip",
+            file_name="HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.zip",
             file_kind="zip",
         )
 
@@ -412,7 +445,7 @@ class UploadWorkflowTests(unittest.TestCase):
             "archive-upload",
             "receiving",
             content=b"archive",
-            file_name="HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.zip",
+            file_name="HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.zip",
             file_kind="zip",
         )
 

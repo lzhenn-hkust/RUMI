@@ -5,15 +5,18 @@ import json
 import os
 import re
 import secrets
+import stat
 import traceback
 import shutil
 import sqlite3
 import subprocess
 import tarfile
 import tempfile
+import threading
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
+from participation_registry import PARTICIPATION_PROFILE_SEEDS
 from rumi_protocol import (  # noqa: F401  (re-exported for api.cgi, manage.py and tests)
     ARCHIVE_NAME_PATTERN,
     ARCHIVE_NAME_RE,
@@ -86,6 +89,8 @@ DB_PATH = DATA_DIR / "rumi_portal.sqlite3"
 INCOMING_DIR = DATA_DIR / "incoming"
 SUBMISSIONS_DIR = DATA_DIR / "submissions"
 LOG_DIR = DATA_DIR / "logs"
+EXTRACTED_DIR = DATA_DIR / "extracted"
+MANIFESTS_DIR = DATA_DIR / "manifests"
 
 SESSION_COOKIE = "rumi_session"
 SESSION_DAYS = 7
@@ -93,10 +98,24 @@ PBKDF2_ITERATIONS = 240000
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024 * 1024
 USER_STORAGE_QUOTA_BYTES = 250 * 1024 * 1024 * 1024
 MAX_CHUNK_BYTES = 8 * 1024 * 1024
-MAX_ARCHIVE_MEMBERS = 3000
-MAX_ARCHIVE_NETCDF_FILES = 1500
+MAX_ARCHIVE_MEMBERS = 6000
 MAX_ARCHIVE_EXPANDED_BYTES = MAX_UPLOAD_BYTES
+MAX_MANIFEST_BYTES = 1 * 1024 * 1024
+MAX_COMMAND_OUTPUT_BYTES = 8 * 1024 * 1024
+MAX_PENDING_VALIDATIONS = 8
+PRIVATE_DIR_MODE = 0o770
+PRIVATE_FILE_MODE = 0o660
 REGISTRATION_CODE_KEY = "registration_code"
+
+INSTITUTION_ALIASES = {
+    "hkust": "HKUST",
+    "hong kong university of science and technology": "HKUST",
+    "the hong kong university of science and technology": "HKUST",
+    "hong kong university of science & technology": "HKUST",
+    "the hong kong university of science & technology": "HKUST",
+    "hong kong university of science and technology (hkust)": "HKUST",
+    "the hong kong university of science and technology (hkust)": "HKUST",
+}
 
 INACTIVE_UPLOAD_STATUSES = (
     "deleted",
@@ -143,16 +162,75 @@ def normalize_email(email):
     return (email or "").strip().lower()
 
 
+def canonical_institution(value):
+    """Return the coordination team's canonical short institution name."""
+    cleaned = " ".join(str(value or "").strip().split())
+    if not cleaned:
+        return ""
+    return INSTITUTION_ALIASES.get(cleaned.casefold(), cleaned)
+
+
 def ensure_dirs():
     old_umask = os.umask(0o077)
     try:
-        for directory in (DATA_DIR, INCOMING_DIR, SUBMISSIONS_DIR, LOG_DIR):
+        for directory in (
+            DATA_DIR,
+            INCOMING_DIR,
+            SUBMISSIONS_DIR,
+            EXTRACTED_DIR,
+            MANIFESTS_DIR,
+            LOG_DIR,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
+            try:
+                directory.chmod(PRIVATE_DIR_MODE)
+            except OSError:
+                pass
     finally:
         os.umask(old_umask)
     data_htaccess = DATA_DIR / ".htaccess"
     if not data_htaccess.exists():
         data_htaccess.write_text("Order allow,deny\nDeny from all\n", encoding="utf-8")
+
+
+def open_private_append(path):
+    """Open a runtime text file with owner/group-only permissions."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.chmod(PRIVATE_DIR_MODE)
+    except OSError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE_MODE)
+    try:
+        try:
+            os.fchmod(fd, PRIVATE_FILE_MODE)
+        except PermissionError:
+            pass
+        return os.fdopen(fd, "a", encoding="utf-8")
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def open_private_binary_append(path):
+    """Open a private binary append stream with owner/group-only permissions."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.chmod(PRIVATE_DIR_MODE)
+    except OSError:
+        pass
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE_MODE)
+    try:
+        try:
+            os.fchmod(fd, PRIVATE_FILE_MODE)
+        except PermissionError:
+            pass
+        return os.fdopen(fd, "ab")
+    except Exception:
+        os.close(fd)
+        raise
 
 
 def connect_db():
@@ -162,6 +240,10 @@ def connect_db():
     con.execute("PRAGMA busy_timeout = 5000")
     con.execute("PRAGMA foreign_keys = ON")
     init_schema(con)
+    try:
+        DB_PATH.chmod(PRIVATE_FILE_MODE)
+    except OSError:
+        pass
     return con
 
 
@@ -187,6 +269,27 @@ def init_schema(con):
             updated_at TEXT NOT NULL,
             last_login TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS participation_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            poc_user_id INTEGER NOT NULL,
+            profile_key TEXT NOT NULL,
+            group_name TEXT NOT NULL,
+            model TEXT NOT NULL,
+            forcing_sources TEXT NOT NULL DEFAULT '',
+            case_studies TEXT NOT NULL DEFAULT '',
+            timeline TEXT NOT NULL DEFAULT '',
+            participants TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(poc_user_id, profile_key),
+            FOREIGN KEY(poc_user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_participation_profiles_poc
+            ON participation_profiles(poc_user_id);
 
         CREATE TABLE IF NOT EXISTS sessions (
             token_hash TEXT PRIMARY KEY,
@@ -244,6 +347,21 @@ def init_schema(con):
 
         CREATE INDEX IF NOT EXISTS idx_login_attempts_email_ip_time
             ON login_attempts(email, ip, attempted_at);
+
+        CREATE TABLE IF NOT EXISTS auth_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            attempted_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_auth_attempts_action_subject_ip_time
+            ON auth_attempts(action, subject, ip, attempted_at);
+
+        CREATE INDEX IF NOT EXISTS idx_auth_attempts_action_ip_time
+            ON auth_attempts(action, ip, attempted_at);
         """
     )
     upload_columns = {
@@ -271,6 +389,8 @@ def init_schema(con):
     for column, definition in USER_COLUMN_ADDITIONS:
         if column not in user_columns:
             con.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+    if "email" in user_columns:
+        seed_participation_profiles(con)
     con.execute("CREATE INDEX IF NOT EXISTS idx_uploads_institution ON uploads(institution)")
     con.execute(
         """
@@ -298,12 +418,89 @@ UPLOAD_COLUMN_ADDITIONS = (
     # Which rule set accepted the submission, so a later protocol change is
     # traceable per upload rather than only per deployment.
     ("rules_version", "TEXT"),
-    # Configuration identity parsed from the v3 archive name.
+    # Archive POC plus legacy configuration columns retained for old records.
     ("poc", "TEXT"),
     ("config_id", "TEXT"),
     ("archive_version", "TEXT"),
     ("participants", "TEXT"),
+    # Derived, private analysis copy of a validated archive. The original
+    # archive remains the source of truth and is never overwritten.
+    ("extracted_path", "TEXT"),
+    ("manifest_path", "TEXT"),
+    ("extraction_status", "TEXT NOT NULL DEFAULT 'not_applicable'"),
+    ("extracted_at", "TEXT"),
+    ("extracted_bytes", "INTEGER NOT NULL DEFAULT 0"),
+    ("extracted_files", "INTEGER NOT NULL DEFAULT 0"),
+    ("extraction_error", "TEXT"),
 )
+
+
+def seed_participation_profiles(con):
+    """Add known POC profiles without overwriting admin-maintained data."""
+    now = utcnow()
+    for seed in PARTICIPATION_PROFILE_SEEDS:
+        user = con.execute(
+            "SELECT id, poc_surname, participants FROM users WHERE lower(email) = ?",
+            (seed["poc_email"].lower(),),
+        ).fetchone()
+        if not user:
+            continue
+        con.execute(
+            """
+            INSERT INTO participation_profiles(
+                poc_user_id, profile_key, group_name, model, forcing_sources,
+                case_studies, timeline, participants, notes, source,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(poc_user_id, profile_key) DO NOTHING
+            """,
+            (
+                user["id"],
+                seed["profile_key"],
+                seed["group_name"],
+                seed["model"],
+                seed["forcing_sources"],
+                seed["case_studies"],
+                seed["timeline"],
+                seed["participants"],
+                seed["notes"],
+                seed["source"],
+                now,
+                now,
+            ),
+        )
+        con.execute(
+            """
+            UPDATE users
+            SET poc_surname = CASE
+                    WHEN COALESCE(TRIM(poc_surname), '') = '' THEN ?
+                    ELSE poc_surname
+                END,
+                participants = CASE
+                    WHEN COALESCE(TRIM(participants), '') = '' THEN ?
+                    ELSE participants
+                END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (seed["poc_surname"], seed["participants"], now, user["id"]),
+        )
+
+
+def participation_profiles_for_user(con, user_id):
+    rows = con.execute(
+        """
+        SELECT id, profile_key, group_name, model, forcing_sources,
+               case_studies, timeline, participants, notes, source,
+               created_at, updated_at
+        FROM participation_profiles
+        WHERE poc_user_id = ?
+        ORDER BY group_name, model, id
+        """,
+        (user_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def hash_password(password, salt_hex=None):
@@ -452,7 +649,7 @@ def make_user_public(row):
         "id": row["id"],
         "email": row["email"],
         "name": row["name"],
-        "institution": row["institution"],
+        "institution": canonical_institution(row["institution"]),
         "role": row["role"],
         "status": row["status"],
         "created_at": row["created_at"],
@@ -513,7 +710,7 @@ def file_kind(name):
         return "zip"
     if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
         return "tar"
-    raise PortalError(400, "Upload a .nc, .zip, .tar.gz, or .tgz file.")
+    raise PortalError(400, "Upload a .zip or .tar.gz structured archive.")
 
 
 def sha256_file(path):
@@ -524,17 +721,70 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def _read_process_output(stream, limit, result, key):
+    captured = bytearray()
+    overflow = False
+    while True:
+        chunk = stream.read(64 * 1024)
+        if not chunk:
+            break
+        remaining = limit - len(captured)
+        if remaining > 0:
+            captured.extend(chunk[:remaining])
+        if len(chunk) > max(remaining, 0):
+            overflow = True
+    result[key] = (bytes(captured), overflow)
+
+
 def run_command(args, timeout=60):
     env = os.environ.copy()
     env["PATH"] = "/home/lzhenn/array74/soft/anaconda3/bin:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH", "")
-    return subprocess.run(
+    process = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout,
         env=env,
-        check=False,
+    )
+    output = {}
+    readers = [
+        threading.Thread(
+            target=_read_process_output,
+            args=(process.stdout, MAX_COMMAND_OUTPUT_BYTES, output, "stdout"),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_read_process_output,
+            args=(process.stderr, MAX_COMMAND_OUTPUT_BYTES, output, "stderr"),
+            daemon=True,
+        ),
+    ]
+    for reader in readers:
+        reader.start()
+
+    timed_out = False
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.kill()
+        process.wait()
+    for reader in readers:
+        reader.join()
+    process.stdout.close()
+    process.stderr.close()
+
+    stdout_bytes, stdout_overflow = output.get("stdout", (b"", False))
+    stderr_bytes, stderr_overflow = output.get("stderr", (b"", False))
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
+    if timed_out:
+        stderr += "\nCommand timed out."
+    if stdout_overflow or stderr_overflow:
+        stderr += "\nCommand output exceeded the validation limit."
+    return subprocess.CompletedProcess(
+        args,
+        1 if timed_out or stdout_overflow or stderr_overflow else process.returncode,
+        stdout=stdout_bytes.decode("utf-8", errors="replace"),
+        stderr=stderr,
     )
 
 
@@ -670,7 +920,7 @@ def validate_netcdf(path, filename, metadata):
 
 
 def validate_archive(path, filename, metadata, progress=None):
-    """Validate a structured RUMI v3 submission archive.
+    """Validate a structured RUMI v3.2 submission archive.
 
     Structure is checked first from member paths alone, so naming and layout
     mistakes are reported in milliseconds. Per-file NetCDF checks only run once
@@ -701,7 +951,12 @@ def validate_archive(path, filename, metadata, progress=None):
 
     def read_member(open_member, entry):
         with open_member(entry) as source:
-            return source.read()
+            data = source.read(MAX_MANIFEST_BYTES + 1)
+        if len(data) > MAX_MANIFEST_BYTES:
+            raise ValueError(
+                f"rumi_manifest.json exceeds the {MAX_MANIFEST_BYTES} byte limit."
+            )
+        return data
 
     def check_members(entries, open_member, archive_kind):
         names = [entry_name(entry) for entry in entries]
@@ -714,10 +969,6 @@ def validate_archive(path, filename, metadata, progress=None):
 
         if len(entries) > MAX_ARCHIVE_MEMBERS:
             errors.add(f"Archive contains more than {MAX_ARCHIVE_MEMBERS} files.")
-        if len(netcdf_entries) > MAX_ARCHIVE_NETCDF_FILES:
-            errors.add(
-                f"Archive contains more than {MAX_ARCHIVE_NETCDF_FILES} NetCDF files."
-            )
         if sum(entry_size(entry) for entry in entries) > MAX_ARCHIVE_EXPANDED_BYTES:
             errors.add("Archive expands beyond the permitted size.")
         if errors:
@@ -872,10 +1123,218 @@ def validate_submission(path, filename, metadata):
     return validate_archive(path, filename, metadata)
 
 
+def extracted_directory(row):
+    """Return the private, derived tree for one accepted archive."""
+    return (
+        EXTRACTED_DIR
+        / slugify(row["institution"])
+        / row["event"]
+        / slugify(row["model"])
+        / slugify(row["upload_id"])
+    )
+
+
+def manifest_path(row):
+    """Return the server-owned manifest path for one accepted archive."""
+    return (
+        MANIFESTS_DIR
+        / slugify(row["institution"])
+        / row["event"]
+        / slugify(row["model"])
+        / (slugify(row["upload_id"]) + ".json")
+    )
+
+
+def _safe_archive_member(name):
+    """Convert an archive member to a safe relative path."""
+    if not isinstance(name, str) or not name or "\x00" in name or "\\" in name:
+        raise ValueError(f"Unsafe archive member path: {name!r}")
+    pure = PurePosixPath(name)
+    if pure.is_absolute() or any(part in ("", ".", "..") for part in pure.parts):
+        raise ValueError(f"Unsafe archive member path: {name!r}")
+    return Path(*pure.parts)
+
+
+def _write_extracted_member(source, target, expected_size):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    written = 0
+    with open(target, "wb") as destination:
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            destination.write(chunk)
+            digest.update(chunk)
+            written += len(chunk)
+    if written != expected_size:
+        raise OSError(
+            f"Archive member size changed while extracting: expected {expected_size}, "
+            f"received {written}."
+        )
+    return digest.hexdigest()
+
+
+def extract_archive(row, heartbeat=None):
+    """Safely expand an accepted archive into a private analysis tree.
+
+    The original archive remains untouched. Extraction is staged and becomes
+    visible only after every member and the server manifest are written.
+    """
+    if row["file_kind"] not in ("zip", "tar"):
+        raise ValueError("Only zip and tar archives can be extracted.")
+    source_path = Path(row["stored_path"] or "")
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Stored archive is missing: {source_path}")
+
+    destination = extracted_directory(row)
+    output_manifest = manifest_path(row)
+    staging = destination.parent / ("." + destination.name + ".extracting")
+    manifest_staging = output_manifest.with_name("." + output_manifest.name + ".tmp")
+    staging.parent.mkdir(parents=True, exist_ok=True)
+    output_manifest.parent.mkdir(parents=True, exist_ok=True)
+    if staging.exists():
+        shutil.rmtree(staging)
+    if manifest_staging.exists():
+        manifest_staging.unlink()
+    staging.mkdir(mode=0o700)
+
+    members = []
+    seen = set()
+    total_size = 0
+
+    def add_member(name, size):
+        nonlocal total_size
+        relative = _safe_archive_member(name)
+        relative_key = relative.as_posix()
+        if relative_key in seen:
+            raise ValueError(f"Archive contains a duplicate member: {name}")
+        seen.add(relative_key)
+        total_size += int(size)
+        if len(seen) > MAX_ARCHIVE_MEMBERS:
+            raise ValueError(f"Archive contains more than {MAX_ARCHIVE_MEMBERS} files.")
+        if total_size > MAX_ARCHIVE_EXPANDED_BYTES:
+            raise ValueError("Archive expands beyond the permitted size.")
+        return relative
+
+    try:
+        if row["file_kind"] == "zip":
+            with zipfile.ZipFile(source_path) as archive:
+                entries = []
+                for info in archive.infolist():
+                    mode = (info.external_attr >> 16) & 0xFFFF
+                    if stat.S_ISLNK(mode):
+                        raise ValueError(f"Archive contains a symbolic link: {info.filename}")
+                    if info.is_dir():
+                        _safe_archive_member(info.filename)
+                        continue
+                    relative = add_member(info.filename, info.file_size)
+                    entries.append((info, relative))
+                for index, (info, relative) in enumerate(entries, 1):
+                    with archive.open(info, "r") as member:
+                        digest = _write_extracted_member(member, staging / relative, info.file_size)
+                    members.append({"path": info.filename, "size": info.file_size, "sha256": digest})
+                    if heartbeat:
+                        heartbeat(index, len(entries))
+        else:
+            with tarfile.open(source_path, "r:*") as archive:
+                entries = []
+                for info in archive.getmembers():
+                    if info.issym() or info.islnk():
+                        raise ValueError(f"Archive contains a link: {info.name}")
+                    if info.isdir():
+                        _safe_archive_member(info.name)
+                        continue
+                    if not info.isfile():
+                        raise ValueError(f"Archive contains a non-file member: {info.name}")
+                    relative = add_member(info.name, info.size)
+                    entries.append((info, relative))
+                for index, (info, relative) in enumerate(entries, 1):
+                    source = archive.extractfile(info)
+                    if source is None:
+                        raise OSError(f"Archive member is unavailable: {info.name}")
+                    with source:
+                        digest = _write_extracted_member(source, staging / relative, info.size)
+                    members.append({"path": info.name, "size": info.size, "sha256": digest})
+                    if heartbeat:
+                        heartbeat(index, len(entries))
+
+        archive_digest = row["sha256"] or sha256_file(source_path)
+        manifest = {
+            "manifest_version": 1,
+            "rules_version": row["rules_version"] or RULES_VERSION,
+            "generated_at": utcnow(),
+            "upload_id": row["upload_id"],
+            "archive": {
+                "file_name": row["file_name"],
+                "sha256": archive_digest,
+                "size": int(row["file_size"]),
+                "institution": row["institution"],
+                "event": row["event"],
+                "model": row["model"],
+                "poc": row["poc"] or "",
+                "config_id": row["config_id"] or "",
+                "member": row["member"] or "",
+                "version": row["archive_version"] or "",
+            },
+            "members": members,
+        }
+        manifest_staging.write_text(
+            json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        if destination.exists():
+            shutil.rmtree(destination)
+        staging.replace(destination)
+        if output_manifest.exists():
+            output_manifest.unlink()
+        manifest_staging.replace(output_manifest)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        if manifest_staging.exists():
+            manifest_staging.unlink()
+        raise
+
+    return {
+        "extracted_path": str(destination),
+        "manifest_path": str(output_manifest),
+        "extracted_bytes": total_size,
+        "extracted_files": len(members),
+    }
+
+
+def set_extraction_status(con, upload_id, status, details=None, error=None):
+    """Persist extraction progress without changing the upload verdict."""
+    details = details or {}
+    con.execute(
+        """
+        UPDATE uploads
+        SET extraction_status = ?, extracted_path = ?, manifest_path = ?,
+            extracted_at = ?, extracted_bytes = ?, extracted_files = ?,
+            extraction_error = ?, updated_at = ?
+        WHERE upload_id = ?
+        """,
+        (
+            status,
+            details.get("extracted_path"),
+            details.get("manifest_path"),
+            utcnow() if status == "ready" else None,
+            int(details.get("extracted_bytes", 0)),
+            int(details.get("extracted_files", 0)),
+            error,
+            utcnow(),
+            upload_id,
+        ),
+    )
+    con.commit()
+
+
 def remove_upload_files(row):
     """Delete an upload's stored and temporary files, then prune empty parents."""
-    for key in ("stored_path", "temp_path"):
-        value = row[key]
+    available = set(row.keys()) if hasattr(row, "keys") else set(row)
+    for key in ("stored_path", "temp_path", "extracted_path", "manifest_path"):
+        value = row[key] if key in available else None
         if not value:
             continue
         path = Path(value)
@@ -883,7 +1342,9 @@ def remove_upload_files(row):
             path.relative_to(DATA_DIR)
         except ValueError:
             continue
-        if path.exists() and path.is_file():
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
             path.unlink()
         for parent in path.parents:
             if parent == DATA_DIR or parent == SUBMISSIONS_DIR or parent == INCOMING_DIR:
@@ -899,7 +1360,7 @@ def log_exception(exc, context=""):
     request_id = secrets.token_hex(6)
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(LOG_DIR / "api_errors.log", "a", encoding="utf-8") as handle:
+        with open_private_append(LOG_DIR / "api_errors.log") as handle:
             handle.write(
                 f"\n[{utcnow()}] request_id={request_id} context={context} "
                 f"type={type(exc).__name__}\n"
@@ -913,7 +1374,7 @@ def log_exception(exc, context=""):
 def storage_directory(row):
     """Where an accepted submission is filed.
 
-    A v3 archive spans several experiments, so it is filed by event and model.
+    A v3.1 archive spans several experiments, so it is filed by event and model.
     Single NetCDF files keep the original four-level path so existing
     submissions stay where the database says they are.
     """
@@ -950,7 +1411,8 @@ def finalize_upload(con, row, validation, digest):
             """
             UPDATE uploads
             SET status = 'rejected', sha256 = ?, validation_json = ?,
-                rules_version = ?, updated_at = ?, worker_pid = NULL
+                rules_version = ?, extraction_status = 'not_applicable',
+                updated_at = ?, worker_pid = NULL
             WHERE upload_id = ?
             """,
             (digest, json.dumps(validation, ensure_ascii=True), RULES_VERSION, now, upload_id),
@@ -986,7 +1448,8 @@ def finalize_upload(con, row, validation, digest):
             """
             UPDATE uploads
             SET status = 'duplicate', temp_path = NULL, sha256 = ?,
-                validation_json = ?, rules_version = ?, updated_at = ?,
+                validation_json = ?, rules_version = ?,
+                extraction_status = 'not_applicable', updated_at = ?,
                 worker_pid = NULL
             WHERE upload_id = ?
             """,
@@ -1006,7 +1469,9 @@ def finalize_upload(con, row, validation, digest):
             """
             UPDATE uploads
             SET status = 'validated', stored_path = ?, temp_path = NULL, sha256 = ?,
-                validation_json = ?, rules_version = ?, updated_at = ?,
+                validation_json = ?, rules_version = ?,
+                extraction_status = ?, extraction_error = NULL,
+                updated_at = ?,
                 worker_pid = NULL
             WHERE upload_id = ?
             """,
@@ -1015,6 +1480,7 @@ def finalize_upload(con, row, validation, digest):
                 digest,
                 json.dumps(validation, ensure_ascii=True),
                 RULES_VERSION,
+                "queued" if row["file_kind"] in ("zip", "tar") else "not_applicable",
                 now,
                 upload_id,
             ),
@@ -1040,7 +1506,7 @@ def finalize_upload(con, row, validation, digest):
             """
             UPDATE uploads
             SET status = 'server_error', sha256 = ?, validation_json = ?,
-                updated_at = ?, worker_pid = NULL
+                extraction_status = 'not_applicable', updated_at = ?, worker_pid = NULL
             WHERE upload_id = ?
             """,
             (digest, json.dumps(validation, ensure_ascii=True), now, upload_id),
@@ -1059,7 +1525,7 @@ def reap_stale_validations(con, older_than_minutes=30):
     cutoff = (
         dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=older_than_minutes)
     ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    rows = con.execute(
+    candidates = con.execute(
         """
         SELECT * FROM uploads
         WHERE status IN ('queued', 'validating')
@@ -1067,7 +1533,18 @@ def reap_stale_validations(con, older_than_minutes=30):
         """,
         (cutoff,),
     ).fetchall()
+    rows = []
+    for row in candidates:
+        try:
+            worker_pid = int(row["worker_pid"] or 0)
+            if worker_pid:
+                os.kill(worker_pid, 0)
+                continue
+        except (OSError, TypeError, ValueError):
+            pass
+        rows.append(row)
     for row in rows:
+        remove_upload_files(row)
         validation = {
             "errors": [
                 "Validation stopped unexpectedly and no submission was accepted. "
@@ -1080,13 +1557,64 @@ def reap_stale_validations(con, older_than_minutes=30):
             """
             UPDATE uploads
             SET status = 'server_error', validation_json = ?, updated_at = ?,
-                worker_pid = NULL
+                worker_pid = NULL, temp_path = NULL
             WHERE upload_id = ?
             """,
             (json.dumps(validation, ensure_ascii=True), utcnow(), row["upload_id"]),
         )
     if rows:
         con.commit()
+    reap_stale_upload_files(con)
+    return len(rows)
+
+
+def reap_stale_upload_files(con, older_than_days=7):
+    """Remove abandoned receiving uploads and orphaned validation temp files."""
+    cutoff = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=older_than_days)
+    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    rows = con.execute(
+        """
+        SELECT * FROM uploads
+        WHERE status = 'receiving' AND updated_at < ?
+        """,
+        (cutoff,),
+    ).fetchall()
+    for row in rows:
+        remove_upload_files(row)
+        validation = {
+            "errors": [
+                "The upload was abandoned for too long and its temporary data "
+                "was removed. Please start the upload again."
+            ],
+            "warnings": [],
+            "summary": {},
+        }
+        con.execute(
+            """
+            UPDATE uploads
+            SET status = 'failed', validation_json = ?, temp_path = NULL,
+                updated_at = ?
+            WHERE upload_id = ? AND status = 'receiving'
+            """,
+            (json.dumps(validation, ensure_ascii=True), utcnow(), row["upload_id"]),
+        )
+    if rows:
+        con.commit()
+
+    cutoff_timestamp = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=older_than_days)
+    ).timestamp()
+    try:
+        candidates = INCOMING_DIR.glob("rumi-validate-*.nc")
+        for path in candidates:
+            try:
+                if path.is_file() and path.stat().st_mtime < cutoff_timestamp:
+                    path.unlink()
+            except OSError:
+                continue
+    except OSError:
+        pass
     return len(rows)
 
 
@@ -1113,6 +1641,13 @@ def upload_record_public(row, include_validation=True):
         "validation_done": row.get("validation_done") or 0,
         "validation_total": row.get("validation_total") or 0,
         "rules_version": row.get("rules_version") or "",
+        "extracted_path": row.get("extracted_path") or "",
+        "manifest_path": row.get("manifest_path") or "",
+        "extraction_status": row.get("extraction_status") or "not_applicable",
+        "extracted_at": row.get("extracted_at") or "",
+        "extracted_bytes": row.get("extracted_bytes") or 0,
+        "extracted_files": row.get("extracted_files") or 0,
+        "extraction_error": row.get("extraction_error") or "",
         "poc": row.get("poc") or "",
         "config_id": row.get("config_id") or "",
         "archive_version": row.get("archive_version") or "",

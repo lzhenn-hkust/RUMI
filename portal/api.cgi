@@ -14,17 +14,17 @@ sys.path.insert(0, str(BASE_DIR / "backend"))
 
 from portal_lib import (  # noqa: E402
     ACCEPTED_UPLOAD_STATUSES,
-    DATA_DIR,
     INACTIVE_UPLOAD_STATUSES,
     INCOMING_DIR,
     LOG_DIR,
     MAX_CHUNK_BYTES,
+    MAX_PENDING_VALIDATIONS,
     MAX_UPLOAD_BYTES,
-    SUBMISSIONS_DIR,
     USER_STORAGE_QUOTA_BYTES,
     PortalError,
     constants_payload,
     connect_db,
+    canonical_institution,
     create_session,
     csrf_value,
     destroy_session,
@@ -34,16 +34,17 @@ from portal_lib import (  # noqa: E402
     import_whitelist,
     is_whitelisted,
     last_admin_guard,
-    load_whitelist_file,
     make_user_public,
     new_token,
     normalize_email,
+    open_private_binary_append,
+    open_private_append,
     parse_archive_name,
-    parse_rumi_filename,
+    seed_participation_profiles,
+    participation_profiles_for_user,
     require_role,
     safe_file_name,
     sha256_file,
-    slugify,
     upload_record_public,
     user_storage_bytes,
     utcnow,
@@ -52,7 +53,6 @@ from portal_lib import (  # noqa: E402
     log_exception,
     reap_stale_validations,
     remove_upload_files,
-    storage_directory,
     verify_password,
     hash_password,
 )
@@ -94,7 +94,7 @@ def request_cookie(name):
 def cookie_path():
     script = os.environ.get("SCRIPT_NAME", "/")
     base = script.rsplit("/", 1)[0] or "/"
-    return base + "/"
+    return base if base.endswith("/") else base + "/"
 
 
 def session_cookie(token, expires=None, clear=False):
@@ -186,7 +186,7 @@ def require_portal_header():
         raise PortalError(403, "Missing portal request header.")
     session_token = request_cookie("rumi_session")
     action = query_one("action")
-    if method in ("POST", "PUT", "DELETE") and session_token and action not in ("login", "register"):
+    if method in ("POST", "PUT", "DELETE") and session_token and action not in ("login", "register", "password_reset"):
         expected = csrf_value(session_token)
         provided = os.environ.get("HTTP_X_CSRF_TOKEN", "")
         if not provided or not secrets.compare_digest(provided, expected):
@@ -216,9 +216,6 @@ def clean_text(value, limit=500):
 
 
 def client_ip():
-    forwarded = os.environ.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()[:64]
     return os.environ.get("REMOTE_ADDR", "")[:64]
 
 
@@ -248,41 +245,75 @@ def too_many_login_attempts(con, email):
     return int(row["c"] or 0) >= 10
 
 
-def metadata_from_payload(payload):
-    fields = [
-        "experiment",
-        "model",
-        "event",
-        "member",
-        "version",
-        "forcing_mode",
-        "forcing_source",
-        "forcing_data",
-        "forcing_data_version",
-        "forcing_resolution",
-        "forcing_update_interval",
-        "simulation_start_time",
-        "initialization_time",
-        "forecast_initialization_time",
-        "forecast_lead_time_hours",
-        "horizontal_resolution",
-        "vertical_levels",
-        "model_top_pressure",
-        "microphysics_scheme",
-        "cumulus_scheme",
-        "pbl_scheme",
-        "radiation_scheme",
-        "land_surface_scheme",
-        "urban_scheme",
-        "surface_layer_scheme",
-        "turbulence_closure",
-        "landuse_dataset",
-        "urban_morphology_source",
-        "terrain_dataset",
-        "soil_dataset",
-        "technical_notes",
-    ]
-    return {field: clean_text(payload.get(field, ""), 3000 if field == "technical_notes" else 500) for field in fields}
+AUTH_RATE_WINDOW_MINUTES = 15
+REGISTRATION_MAX_FAILED_ATTEMPTS = 10
+PASSWORD_RESET_MAX_FAILED_ATTEMPTS = 5
+AUTH_IP_MAX_FAILED_ATTEMPTS = 30
+
+
+def record_auth_attempt(con, action, subject, success):
+    subject = normalize_email(subject)
+    ip = client_ip()
+    if success:
+        con.execute(
+            "DELETE FROM auth_attempts WHERE action = ? AND subject = ? AND ip = ? AND success = 0",
+            (action, subject, ip),
+        )
+    con.execute(
+        "INSERT INTO auth_attempts(action, subject, ip, success, attempted_at) VALUES (?, ?, ?, ?, ?)",
+        (action, subject, ip, 1 if success else 0, utcnow()),
+    )
+    con.execute(
+        "DELETE FROM auth_attempts WHERE attempted_at < datetime('now', '-1 day')"
+    )
+    con.commit()
+
+
+def too_many_auth_attempts(con, action, subject, limit):
+    row = con.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM auth_attempts
+        WHERE action = ? AND subject = ? AND ip = ?
+          AND success = 0
+          AND attempted_at >= datetime('now', ?)
+        """,
+        (
+            action,
+            normalize_email(subject),
+            client_ip(),
+            f"-{AUTH_RATE_WINDOW_MINUTES} minutes",
+        ),
+    ).fetchone()
+    return int(row["c"] or 0) >= limit
+
+
+def too_many_auth_ip_attempts(con, action, limit):
+    row = con.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM auth_attempts
+        WHERE action = ? AND ip = ?
+          AND success = 0
+          AND attempted_at >= datetime('now', ?)
+        """,
+        (action, client_ip(), f"-{AUTH_RATE_WINDOW_MINUTES} minutes"),
+    ).fetchone()
+    return int(row["c"] or 0) >= limit
+
+
+def enforce_auth_rate_limit(con, action, subject, subject_limit):
+    if too_many_auth_attempts(con, action, subject, subject_limit) or too_many_auth_ip_attempts(
+        con, action, AUTH_IP_MAX_FAILED_ATTEMPTS
+    ):
+        raise PortalError(429, "Too many attempts. Try again later.")
+
+
+def public_user(con, row):
+    user = make_user_public(row)
+    if user:
+        user["participation_profiles"] = participation_profiles_for_user(con, row["id"])
+    return user
 
 
 def handle_me(con):
@@ -302,25 +333,29 @@ def handle_me(con):
                     "SELECT COUNT(*) AS c FROM uploads WHERE user_id = ?", (user["id"],)
                 ).fetchone()["c"],
             }
-    return {"ok": True, "user": make_user_public(user), "stats": stats, "constants": constants_payload()}
+    return {"ok": True, "user": public_user(con, user), "stats": stats, "constants": constants_payload()}
 
 
 def handle_register(con):
     payload = read_json()
     email = normalize_email(payload.get("email"))
     name = clean_text(payload.get("name"), 120)
-    institution = clean_text(payload.get("institution"), 200)
+    institution = canonical_institution(clean_text(payload.get("institution"), 200))
     password = payload.get("password") or ""
     registration_code = clean_text(payload.get("registration_code"), 120)
     if not email or not name or not institution or not password:
         raise PortalError(400, "Email, name, institution, and password are required.")
-    if registration_code != ensure_registration_code(con):
+    enforce_auth_rate_limit(con, "register", email, REGISTRATION_MAX_FAILED_ATTEMPTS)
+    if not secrets.compare_digest(registration_code, ensure_registration_code(con)):
+        record_auth_attempt(con, "register", email, False)
         raise PortalError(403, "Invalid registration code.")
     if len(password) < 10:
         raise PortalError(400, "Password must be at least 10 characters.")
     if not is_whitelisted(con, email):
+        record_auth_attempt(con, "register", email, False)
         raise PortalError(403, "This email is not on the RUMI modeler whitelist.")
     if con.execute("SELECT 1 FROM users WHERE email = ?", (email,)).fetchone():
+        record_auth_attempt(con, "register", email, False)
         raise PortalError(409, "An account already exists for this email.")
     salt, digest = hash_password(password)
     now = utcnow()
@@ -333,15 +368,17 @@ def handle_register(con):
     )
     con.commit()
     row = con.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    seed_participation_profiles(con)
     token, expires = create_session(con, row["id"])
     con.execute("UPDATE users SET last_login = ?, updated_at = ? WHERE id = ?", (now, now, row["id"]))
     con.commit()
+    record_auth_attempt(con, "register", email, True)
     row = con.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
     return {
         "payload": {
             "ok": True,
             "message": "Registration complete. You are signed in.",
-            "user": make_user_public(row),
+            "user": public_user(con, row),
             "constants": constants_payload(),
         },
         "cookies": [session_cookie(token, expires=expires), csrf_cookie(token)],
@@ -368,7 +405,7 @@ def handle_login(con):
     con.commit()
     row = con.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
     return {
-        "payload": {"ok": True, "user": make_user_public(row), "constants": constants_payload()},
+        "payload": {"ok": True, "user": public_user(con, row), "constants": constants_payload()},
         "cookies": [session_cookie(token, expires=expires), csrf_cookie(token)],
     }
 
@@ -399,33 +436,44 @@ def handle_change_password(con):
     return {"ok": True}
 
 
-def handle_update_profile(con):
-    user = require_approved_user(con)
+def handle_password_reset(con):
     payload = read_json()
-    name = clean_text(payload.get("name", user["name"]), 120)
-    institution = clean_text(payload.get("institution", user["institution"]), 200)
-    poc_surname = clean_text(payload.get("poc_surname", ""), 80)
-    participants = clean_text(payload.get("participants", ""), 1000)
-    if not name or not institution:
-        raise PortalError(400, "Name and institution are required.")
+    email = normalize_email(payload.get("email"))
+    registration_code = clean_text(payload.get("registration_code"), 120)
+    new_password = payload.get("new_password") or ""
+    if not email or not registration_code or not new_password:
+        raise PortalError(400, "Email, initial invitation code, and new password are required.")
+    enforce_auth_rate_limit(con, "password_reset", email, PASSWORD_RESET_MAX_FAILED_ATTEMPTS)
+    if len(new_password) < 10:
+        raise PortalError(400, "New password must be at least 10 characters.")
+    if not secrets.compare_digest(registration_code, ensure_registration_code(con)):
+        record_auth_attempt(con, "password_reset", email, False)
+        raise PortalError(403, "Invalid initial invitation code.")
+    if not is_whitelisted(con, email):
+        record_auth_attempt(con, "password_reset", email, False)
+        raise PortalError(403, "This email is not on the RUMI modeler whitelist.")
+    row = con.execute(
+        "SELECT * FROM users WHERE email = ? AND status = 'approved'", (email,)
+    ).fetchone()
+    if not row:
+        record_auth_attempt(con, "password_reset", email, False)
+        raise PortalError(404, "No approved RUMI account was found for this email.")
+    salt, digest = hash_password(new_password)
+    now = utcnow()
     con.execute(
-        """
-        UPDATE users
-        SET name = ?, institution = ?, poc_surname = ?, participants = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (name, institution, poc_surname, participants, utcnow(), user["id"]),
+        "UPDATE users SET password_salt = ?, password_hash = ?, updated_at = ? WHERE id = ?",
+        (salt, digest, now, row["id"]),
     )
+    con.execute("DELETE FROM sessions WHERE user_id = ?", (row["id"],))
     con.commit()
-    row = con.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
-    return {"ok": True, "user": make_user_public(row)}
+    record_auth_attempt(con, "password_reset", email, True)
+    return {"ok": True, "message": "Password reset complete. You can now sign in."}
 
 
 def handle_admin_users(con):
     require_admin(con)
     users = [
-        make_user_public(row)
+        public_user(con, row)
         for row in con.execute("SELECT * FROM users ORDER BY status, institution, name").fetchall()
     ]
     whitelist = [
@@ -440,7 +488,7 @@ def handle_admin_create_user(con):
     payload = read_json()
     email = normalize_email(payload.get("email"))
     name = clean_text(payload.get("name"), 120)
-    institution = clean_text(payload.get("institution"), 200)
+    institution = canonical_institution(clean_text(payload.get("institution"), 200))
     role = payload.get("role") if payload.get("role") in ("modeler", "admin") else "modeler"
     status = payload.get("status") if payload.get("status") in ("pending", "approved", "disabled") else "approved"
     password = payload.get("password") or new_token()[:16]
@@ -480,7 +528,9 @@ def handle_admin_update_user(con):
     status = payload.get("status") if payload.get("status") in ("pending", "approved", "disabled", "deleted") else row["status"]
     last_admin_guard(con, user_id, role, status)
     name = clean_text(payload.get("name", row["name"]), 120)
-    institution = clean_text(payload.get("institution", row["institution"]), 200)
+    institution = canonical_institution(
+        clean_text(payload.get("institution", row["institution"]), 200)
+    )
     now = utcnow()
     con.execute(
         "UPDATE users SET name = ?, institution = ?, role = ?, status = ?, updated_at = ? WHERE id = ?",
@@ -537,56 +587,47 @@ def handle_upload_start(con):
     if user_storage_bytes(con, user["id"]) + size > USER_STORAGE_QUOTA_BYTES:
         raise PortalError(400, "User storage quota would be exceeded.")
     kind = file_kind(file_name)
-    metadata = metadata_from_payload(payload)
-    requested_replacement = clean_text(payload.get("replace_upload_id"), 80)
-    participants = clean_text(
-        payload.get("participants") or user.get("participants") or "", 1000
-    )
-
-    # A v3 archive carries its own identity in its name, and it spans several
-    # experiments, so nothing here is retyped by the participant.
-    archive = parse_archive_name(file_name) if kind in ("zip", "tar") else None
-    if kind in ("zip", "tar"):
-        if not archive:
-            raise PortalError(
-                400,
-                "Archive name must be <INSTITUTE>-<MODEL>-<EVENT>-<POC>-"
-                "<CONFIG>-r<NN>.tar.gz, for example "
-                "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz. Fields must "
-                "be uppercase letters and digits without hyphens, so a model "
-                "such as WRF-ARW is written WRFARW.",
-                {"code": "archive_name"},
-            )
-        metadata["event"] = archive["event"]
-        metadata["model"] = archive["model"]
-        metadata["experiment"] = "(archive)"
-
-    if metadata["event"] not in constants_payload()["events"]:
-        raise PortalError(400, "Select a valid RUMI event.")
-    if not metadata["experiment"] or not metadata["model"]:
-        raise PortalError(400, "Experiment and model are required.")
-    parsed = parse_rumi_filename(file_name) if kind == "netcdf" else None
-    if kind == "netcdf" and not parsed:
+    if kind not in ("zip", "tar") or file_name.lower().endswith(".tgz"):
         raise PortalError(
             400,
-            "File name must follow <experiment>-<Model>-<Event>-"
-            "<YYYYMMDDHHMMSS>[_member][_rNN].nc, for example "
-            "ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc.",
+            "New submissions must be a structured .zip or .tar.gz archive "
+            "containing Participant_Model_Documentation.pdf and the NetCDF files.",
+            {"code": "archive_only"},
         )
-    if parsed:
-        comparisons = (
-            ("experiment", str.upper),
-            ("model", str.lower),
-            ("event", str.upper),
+    requested_replacement = clean_text(payload.get("replace_upload_id"), 80)
+    registered_profiles = participation_profiles_for_user(con, user["id"])
+    participants = clean_text(user.get("participants") or "", 1000)
+    if not participants:
+        participants = "; ".join(
+            profile["participants"]
+            for profile in registered_profiles
+            if profile.get("participants")
+        )[:1000]
+
+    # A structured archive carries its event, model, and optional configuration
+    # and ensemble member in its name.
+    archive = parse_archive_name(file_name)
+    if not archive:
+        raise PortalError(
+            400,
+            "Archive name must be <INST>-<MODEL>-<EVENT>-<POC>"
+            "[-CONFIG<NN>][-MEM<NN>].tar.gz or .zip, for example "
+            "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz. Fields must be "
+            "uppercase letters and digits without hyphens, so a model such as "
+            "WRF-ARW is written WRFARW.",
+            {"code": "archive_name"},
         )
-        for field, normalize in comparisons:
-            submitted = metadata.get(field, "")
-            if submitted and normalize(parsed[field]) != normalize(submitted):
-                raise PortalError(
-                    400,
-                    f"File name {field} does not match the submitted metadata.",
-                )
-    timestamp_utc = parsed["timestamp"] if parsed else None
+    metadata = {
+        "event": archive["event"],
+        "model": archive["model"],
+        "experiment": "(archive)",
+        "config_id": archive["config"],
+        "member": archive["member"],
+    }
+
+    if archive["event"] not in constants_payload()["events"]:
+        raise PortalError(400, "The archive name contains an unsupported RUMI event.")
+    timestamp_utc = None
     inactive_placeholders = ", ".join("?" for _ in INACTIVE_UPLOAD_STATUSES)
     existing = con.execute(
         f"""
@@ -645,7 +686,7 @@ def handle_upload_start(con):
         (
             upload_id,
             user["id"],
-            user["institution"],
+            canonical_institution(user["institution"]),
             file_name,
             size,
             kind,
@@ -653,14 +694,14 @@ def handle_upload_start(con):
             metadata["model"],
             metadata["event"],
             timestamp_utc,
-            metadata["member"],
-            metadata["version"],
+            archive["member"],
+            "",
             json.dumps(metadata, ensure_ascii=True),
             str(temp_path),
             existing["upload_id"] if existing else None,
-            archive["poc"] if archive else (user.get("poc_surname") or ""),
-            archive["config"] if archive else "",
-            archive["version"] if archive else "",
+            archive["poc"],
+            archive["config"],
+            archive["version"],
             participants,
             now,
             now,
@@ -690,7 +731,7 @@ def handle_upload_chunk(con):
     chunk = read_raw_body(MAX_CHUNK_BYTES)
     temp_path = Path(row["temp_path"])
     temp_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(temp_path, "ab") as handle:
+    with open_private_binary_append(temp_path) as handle:
         handle.write(chunk)
     received = expected + len(chunk)
     now = utcnow()
@@ -711,6 +752,14 @@ def queue_archive_validation(con, row):
     neither the response nor the child depends on the other surviving.
     """
     upload_id = row["upload_id"]
+    pending = con.execute(
+        "SELECT COUNT(*) AS c FROM uploads WHERE status IN ('queued', 'validating')"
+    ).fetchone()["c"]
+    if int(pending or 0) >= MAX_PENDING_VALIDATIONS:
+        raise PortalError(
+            429,
+            "The validation queue is temporarily full. Please try again later.",
+        )
     now = utcnow()
     con.execute(
         """
@@ -726,7 +775,7 @@ def queue_archive_validation(con, row):
     worker = BASE_DIR / "backend" / "validate_worker.py"
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(LOG_DIR / "worker.log", "a", encoding="utf-8") as log:
+        with open_private_append(LOG_DIR / "worker.log") as log:
             process = subprocess.Popen(
                 [sys.executable, str(worker), "--upload-id", upload_id],
                 stdin=subprocess.DEVNULL,
@@ -791,7 +840,8 @@ def handle_upload_finish(con):
     if row["file_kind"] in ("zip", "tar"):
         return queue_archive_validation(con, row)
 
-    # A single NetCDF file takes a fraction of a second, so it stays inline.
+    # Keep historical single-NetCDF records readable while new uploads use the
+    # structured-archive worker above.
     metadata = json.loads(row["metadata_json"])
     now = utcnow()
     con.execute(
@@ -885,15 +935,6 @@ def handle_upload_delete(con):
     return {"ok": True}
 
 
-def handle_bootstrap_info(con):
-    require_admin(con)
-    admins = con.execute(
-        "SELECT COUNT(*) AS c FROM users WHERE role = 'admin' AND status = 'approved'"
-    ).fetchone()["c"]
-    whitelist = con.execute("SELECT COUNT(*) AS c FROM whitelist").fetchone()["c"]
-    return {"ok": True, "admins": admins, "whitelist": whitelist}
-
-
 def handle_download(con):
     allowed = {
         "RUMI_template_2d.nc": ("downloads/RUMI_template_2d.nc", "application/octet-stream"),
@@ -917,7 +958,7 @@ ROUTES = {
     "login": handle_login,
     "logout": handle_logout,
     "change_password": handle_change_password,
-    "update_profile": handle_update_profile,
+    "password_reset": handle_password_reset,
     "admin_users": handle_admin_users,
     "admin_create_user": handle_admin_create_user,
     "admin_update_user": handle_admin_update_user,
@@ -930,7 +971,6 @@ ROUTES = {
     "upload_status": handle_upload_status,
     "uploads": handle_uploads,
     "upload_delete": handle_upload_delete,
-    "bootstrap_info": handle_bootstrap_info,
     "download": handle_download,
 }
 

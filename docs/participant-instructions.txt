@@ -1,12 +1,12 @@
 ================================================================================
 RUMI PHASE 1 - HOW TO PREPARE AND SUBMIT YOUR SIMULATION OUTPUT
-Rules version: 2026-08-rumi-v3
+Rules version: 2026-08-rumi-v3.2
 Portal:        https://envf.ust.hk/dataview/test/lzn/RUMI/
 Contact:       zli@ust.hk
 ================================================================================
 
 You submit ONE ARCHIVE PER EVENT. Each archive covers one event, one model
-configuration, one version. Submit only the events, experiments, and
+configuration and ensemble member. Submit only the events, experiments, and
 initialization runs you actually completed.
 
 
@@ -14,26 +14,26 @@ initialization runs you actually completed.
 1. NAME YOUR ARCHIVE
 --------------------------------------------------------------------------------
 
-    <INSTITUTE>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>.tar.gz
+    <INSTITUTE>-<MODEL>-<EVENT>-<POC>[-CONFIG<NN>][-MEM<NN>].tar.gz
 
 Example:
 
-    HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
+    HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz
 
   INSTITUTE  your institution short code          e.g. HKUST
   MODEL      your model                           e.g. MPAS, WRF, UM
   EVENT      one of the five event codes below
   POC        surname of your point of contact     e.g. LIU
-  CONFIG     your configuration label             e.g. CONFIG01
-  NN         version, starting at 01
+  CONFIGNN   optional configuration label          e.g. CONFIG01
+  MEMNN      optional ensemble member              e.g. MEM01
 
 IMPORTANT: tokens must be UPPERCASE letters and digits with NO HYPHENS inside
 them, because the hyphen separates fields. Write "WRF-ARW" as "WRFARW".
 
-Increment the version (r02, r03, ...) when you resubmit a corrected archive for
-the same event and configuration.
+When both optional suffixes are present, write CONFIG before MEM. Use the
+portal's Replace action when resubmitting a corrected archive.
 
-.zip and .tgz are also accepted.
+.zip is also accepted.
 
 
 --------------------------------------------------------------------------------
@@ -51,7 +51,7 @@ the same event and configuration.
 3. BUILD THE DIRECTORY TREE
 --------------------------------------------------------------------------------
 
-    HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+    HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/
         Participant_Model_Documentation.pdf
         ERA5-AN/
             Init-0/
@@ -193,20 +193,20 @@ Download rumi_validate.py from the portal and run it on the UNCOMPRESSED
 directory. It applies exactly the same rules and the same rules version as the
 portal, so if it passes locally it will pass on upload.
 
-    python3 rumi_validate.py HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+    python3 rumi_validate.py HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/
 
 Once it reports no errors, generate the manifest and pack:
 
-    python3 rumi_validate.py --write-manifest HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
-    tar -czf HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz \
-            HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+    python3 rumi_validate.py --write-manifest HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/
+    tar -czf HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz \
+            HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/
 
 You do NOT write the manifest by hand - the validator generates it from your
 directory structure and NetCDF metadata.
 
 Then run it once more on the finished archive:
 
-    python3 rumi_validate.py HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
+    python3 rumi_validate.py HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz
 
 This second run is worth the minute it takes. Checking the extracted folder
 cannot see what you eventually name the .tar.gz, and the portal does check that
@@ -223,7 +223,7 @@ The script needs Python 3 and either the netCDF4 package or the ncdump command.
 
 Sign in at the portal, go to Upload, and select your archive. Your institution
 and point of contact come from your account, and the model, event,
-configuration, and version are read from the archive name - you do not retype
+configuration, and ensemble member are read from the archive name - you do not retype
 them.
 
 Large uploads:
@@ -237,8 +237,8 @@ Large uploads:
   * Naming and directory problems are reported within seconds, before any
     per-file checking starts.
 
-If a submission is rejected, fix the reported errors, bump the version to r02,
-and upload again.
+If a submission is rejected, fix the reported errors and use the portal's
+Replace action to upload the corrected archive.
 
 
 --------------------------------------------------------------------------------

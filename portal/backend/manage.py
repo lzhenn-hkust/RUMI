@@ -5,7 +5,8 @@ import sys
 from pathlib import Path
 
 from portal_lib import (
-    DATA_DIR,
+    ACCEPTED_UPLOAD_STATUSES,
+    extract_archive,
     reap_stale_validations,
     connect_db,
     ensure_registration_code,
@@ -13,6 +14,9 @@ from portal_lib import (
     import_whitelist,
     load_whitelist_file,
     normalize_email,
+    log_exception,
+    remove_upload_files,
+    set_extraction_status,
     set_setting,
     utcnow,
 )
@@ -115,27 +119,57 @@ def status(args):
 
 def delete_upload(args):
     with connect_db() as con:
-        base = DATA_DIR
         row = con.execute(
-            "SELECT stored_path, temp_path FROM uploads WHERE upload_id = ?",
+            "SELECT * FROM uploads WHERE upload_id = ?",
             (args.upload_id,),
         ).fetchone()
         if row:
-            for value in (row["stored_path"], row["temp_path"]):
-                if not value:
-                    continue
-                path = Path(value)
-                try:
-                    path.relative_to(base)
-                except ValueError:
-                    continue
-                if path.exists():
-                    path.unlink()
+            remove_upload_files(row)
         con.execute("DELETE FROM uploads WHERE upload_id = ?", (args.upload_id,))
         if args.clear_sessions:
             con.execute("DELETE FROM sessions")
         con.commit()
     print(f"deleted_upload={args.upload_id}")
+
+
+def extract_uploads(args):
+    """Prepare private analysis copies for accepted archives already on disk."""
+    placeholders = ", ".join("?" for _ in ACCEPTED_UPLOAD_STATUSES)
+    with connect_db() as con:
+        query = f"""
+            SELECT * FROM uploads
+            WHERE file_kind IN ('zip', 'tar')
+              AND status IN ({placeholders})
+              AND stored_path IS NOT NULL
+        """
+        params = list(ACCEPTED_UPLOAD_STATUSES)
+        if args.upload_id:
+            query += " AND upload_id = ?"
+            params.append(args.upload_id)
+        elif not args.force:
+            query += " AND COALESCE(extraction_status, 'not_applicable') <> 'ready'"
+        query += " ORDER BY created_at"
+        rows = con.execute(query, params).fetchall()
+        failures = 0
+        for row in rows:
+            print(f"extracting_upload={row['upload_id']}|{row['file_name']}")
+            try:
+                set_extraction_status(con, row["upload_id"], "extracting")
+                details = extract_archive(row)
+                set_extraction_status(con, row["upload_id"], "ready", details=details)
+                print(
+                    f"extracted_upload={row['upload_id']}|files={details['extracted_files']}|"
+                    f"bytes={details['extracted_bytes']}"
+                )
+            except Exception as exc:  # noqa: BLE001 - continue the backfill
+                failures += 1
+                request_id = log_exception(exc, context=f"backfill-extract:{row['upload_id']}")
+                message = f"Backfill extraction failed. Reference: {request_id}"
+                set_extraction_status(con, row["upload_id"], "failed", error=message)
+                print(f"extraction_failed={row['upload_id']}|{message}", file=sys.stderr)
+    print(f"processed_archives={len(rows)}")
+    print(f"extraction_failures={failures}")
+    return 1 if failures else 0
 
 
 def approve_whitelisted_pending(args):
@@ -201,6 +235,15 @@ def main():
     p_delete.add_argument("--upload-id", required=True)
     p_delete.add_argument("--clear-sessions", action="store_true")
     p_delete.set_defaults(func=delete_upload)
+
+    p_extract = sub.add_parser("extract-uploads")
+    p_extract.add_argument("--upload-id")
+    p_extract.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild analysis copies even when extraction_status is already ready.",
+    )
+    p_extract.set_defaults(func=extract_uploads)
 
     p_approve = sub.add_parser("approve-whitelisted-pending")
     p_approve.set_defaults(func=approve_whitelisted_pending)

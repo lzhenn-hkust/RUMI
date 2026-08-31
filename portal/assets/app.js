@@ -41,6 +41,23 @@ function formMessage(id, message = "", type = "ok") {
   el.classList.toggle("hidden", !message);
 }
 
+function showPasswordReset() {
+  const panel = $("#passwordResetPanel");
+  const loginEmail = $("#loginForm input[name='email']").value.trim();
+  panel.classList.remove("hidden");
+  const emailInput = $("#passwordResetForm input[name='email']");
+  if (loginEmail && !emailInput.value) emailInput.value = loginEmail;
+  window.setTimeout(() => emailInput.focus(), 0);
+}
+
+function hidePasswordReset() {
+  const panel = $("#passwordResetPanel");
+  if (!panel) return;
+  panel.classList.add("hidden");
+  $("#passwordResetForm").reset();
+  formMessage("#resetMessage");
+}
+
 function cookieValue(name) {
   return document.cookie
     .split(";")
@@ -105,31 +122,61 @@ function setView() {
   $$(".admin-only").forEach((el) => el.classList.toggle("hidden", !signedIn || state.user.role !== "admin"));
   if (signedIn) {
     fillConstants();
-    fillProfileForm();
-    fillUploadParticipants();
+    renderIdentityViews();
     loadUploads();
   }
 }
 
-// Submission identity (Account tab) is entirely account state - repopulate
-// it from state.user every time we (re)render a signed-in view, e.g. after
-// login or after update_profile returns the saved copy.
-function fillProfileForm() {
-  if (!state.user) return;
-  const form = $("#profileForm");
-  form.elements.name.value = state.user.name || "";
-  form.elements.institution.value = state.user.institution || "";
-  form.elements.poc_surname.value = state.user.poc_surname || "";
-  form.elements.participants.value = state.user.participants || "";
+function participationProfileMarkup(profiles, compact = false) {
+  if (!profiles.length) {
+    return '<p class="muted">No participation profile is registered for this account yet. Please contact an administrator.</p>';
+  }
+  return profiles.map((profile) => `
+    <article class="participation-profile${compact ? " compact" : ""}">
+      <div class="participation-profile-head">
+        <strong>${escapeHtml(profile.group_name)}</strong>
+        <span class="pill">Registered POC profile</span>
+      </div>
+      <dl class="identity-fields">
+        <dt>Model</dt><dd>${escapeHtml(profile.model)}</dd>
+        <dt>Driving source</dt><dd>${escapeHtml(profile.forcing_sources || "—")}</dd>
+        <dt>Case studies</dt><dd>${escapeHtml(profile.case_studies || "—")}</dd>
+        <dt>Participants</dt><dd>${escapeHtml(profile.participants || "—")}</dd>
+        <dt>Timeline</dt><dd>${escapeHtml(profile.timeline || "—")}</dd>
+      </dl>
+    </article>
+  `).join("");
 }
 
-// The upload form's own Participant name(s) field is just a convenience
-// prefill from the account's default participant list - only fill it while
-// it is still empty so we never clobber something the user is mid-typing.
-function fillUploadParticipants() {
+// Identity and participation metadata come from the authenticated account and
+// the admin-curated registry. They are displayed for transparency, not sent
+// back as editable form fields on every upload.
+function renderIdentityViews() {
   if (!state.user) return;
-  const field = $('[name="participants"]', $("#uploadForm"));
-  if (field && !field.value) field.value = state.user.participants || "";
+  const profiles = state.user.participation_profiles || [];
+  const identity = `
+    <dt>Name</dt><dd>${escapeHtml(state.user.name || "—")}</dd>
+    <dt>Email</dt><dd>${escapeHtml(state.user.email || "—")}</dd>
+    <dt>Institution</dt><dd>${escapeHtml(state.user.institution || "—")}</dd>
+    <dt>POC surname</dt><dd>${escapeHtml(state.user.poc_surname || "—")}</dd>
+    <dt>Participants</dt><dd>${escapeHtml(state.user.participants || "—")}</dd>
+  `;
+  const accountIdentity = $("#accountIdentityFields");
+  if (accountIdentity) accountIdentity.innerHTML = identity;
+  const accountProfiles = $("#accountParticipationProfiles");
+  if (accountProfiles) accountProfiles.innerHTML = participationProfileMarkup(profiles);
+
+  const uploadIdentity = {
+    uploadIdentityName: state.user.name,
+    uploadIdentityEmail: state.user.email,
+    uploadIdentityInstitution: state.user.institution,
+  };
+  Object.entries(uploadIdentity).forEach(([id, value]) => {
+    const field = $(`#${id}`);
+    if (field) field.textContent = value || "—";
+  });
+  const uploadProfiles = $("#uploadParticipationProfiles");
+  if (uploadProfiles) uploadProfiles.innerHTML = participationProfileMarkup(profiles, true);
 }
 
 function renderVarList(selector, names) {
@@ -144,23 +191,6 @@ function renderVarList(selector, names) {
 
 function fillConstants() {
   if (!state.constants) return;
-  const experimentList = $("#experimentOptions");
-  const eventSelect = $('[name="event"]', $("#uploadForm"));
-  if (!experimentList.children.length) {
-    state.constants.experiments.forEach((item) => {
-      const option = document.createElement("option");
-      option.value = item;
-      experimentList.append(option);
-    });
-  }
-  if (!eventSelect.options.length) {
-    Object.entries(state.constants.events).forEach(([code, item]) => {
-      const option = document.createElement("option");
-      option.value = code;
-      option.textContent = `${code} · ${item.category}`;
-      eventSelect.append(option);
-    });
-  }
   renderVarList("#coreVarList", state.constants.core_2d_vars);
   renderVarList("#radiationVarList", state.constants.recommended_radiation_vars);
   $("#radiationVarNote").textContent =
@@ -245,6 +275,11 @@ function groupUploads(uploads, keyFunction) {
 function submissionRows(uploads) {
   return uploads.map((upload) => {
     const validation = validationText(upload.validation);
+    const isArchive = ["zip", "tar"].includes(upload.file_kind);
+    const extractionStatus = upload.extraction_status || (isArchive ? "queued" : "not_applicable");
+    const extraction = isArchive
+      ? `<div class="archive-processing">${statusPill(extractionStatus)}<span class="muted">${upload.extracted_files || 0} files · ${bytes(upload.extracted_bytes || 0)}</span></div>`
+      : `<span class="muted">Not applicable</span>`;
     const fileInfo = `${escapeHtml(upload.file_name)}<br><span class="muted">${escapeHtml(bytes(upload.file_size))}</span>`;
     const actions = upload.status === "deleted"
       ? ""
@@ -254,6 +289,7 @@ function submissionRows(uploads) {
       <td data-label="Event">${escapeHtml(upload.event)}</td>
       <td data-label="Model">${escapeHtml(upload.model)}</td>
       <td data-label="Status">${statusPill(upload.status)}</td>
+      <td data-label="Analysis copy">${extraction}</td>
       <td data-label="Validation">${validationDetails(upload.validation) || escapeHtml(validation)}</td>
       <td data-label="Updated">${escapeHtml(upload.updated_at || upload.created_at)}</td>
       <td data-label="Actions"><div class="row-actions">${actions}</div></td>
@@ -270,6 +306,7 @@ function submissionTable(uploads) {
           <th>Event</th>
           <th>Model</th>
           <th>Status</th>
+          <th>Analysis copy</th>
           <th>Validation</th>
           <th>Updated</th>
           <th>Actions</th>
@@ -360,24 +397,21 @@ async function deleteUpload(uploadId) {
 
 function renderUsers(users) {
   const rows = users.map((user) => {
-    const actions = [];
-    if (user.status !== "approved") actions.push(`<button data-action="approve" data-id="${user.id}">Approve</button>`);
-    if (user.status !== "disabled") actions.push(`<button data-action="disable" data-id="${user.id}">Disable</button>`);
-    if (user.status !== "deleted") actions.push(`<button data-action="delete" data-id="${user.id}">Delete</button>`);
-    const roleSelect = `<select data-role="${user.id}">
+    const roleSelect = `<select class="role-select" data-role="${user.id}" aria-label="Role for ${escapeHtml(user.name)}">
       <option value="modeler"${user.role === "modeler" ? " selected" : ""}>modeler</option>
       <option value="admin"${user.role === "admin" ? " selected" : ""}>admin</option>
     </select>`;
+    const participation = (user.participation_profiles || []).map((profile) =>
+      `${escapeHtml(profile.group_name)} · ${escapeHtml(profile.model)}`
+    ).join("<br>") || '<span class="muted">Not linked</span>';
     return `<tr>
       <td data-label="Name">${escapeHtml(user.name)}</td>
-      <td data-label="Email">${escapeHtml(user.email)}</td>
       <td data-label="Institution">${escapeHtml(user.institution)}</td>
+      <td data-label="Participation">${participation}</td>
       <td data-label="Role">${roleSelect}</td>
-      <td data-label="Status">${statusPill(user.status)}</td>
-      <td data-label="Actions"><div class="row-actions">${actions.join("")}</div></td>
     </tr>`;
   });
-  $("#usersBody").innerHTML = rows.join("") || `<tr><td colspan="6" class="muted">No users.</td></tr>`;
+  $("#usersBody").innerHTML = rows.join("") || `<tr><td colspan="4" class="muted">No users.</td></tr>`;
 }
 
 async function submitLogin(event) {
@@ -433,27 +467,11 @@ async function logout() {
   }
 }
 
-function parseFileName(name) {
-  if (!state.constants) return null;
-  const events = Object.keys(state.constants.events).join("|");
-  const pattern = new RegExp(`^([A-Za-z0-9._]+(?:-[A-Za-z0-9._]+)*)-(AN|FC)-([A-Za-z0-9._]+)-(${events})-(\\d{14})(?:_([A-Za-z0-9._-]+))?(?:_r([0-9]{2,}))?\\.nc$`);
-  const match = name.match(pattern);
-  if (!match) return null;
-  return {
-    experiment: `${match[1]}-${match[2]}`,
-    model: match[3],
-    event: match[4],
-    stamp: match[5],
-    member: match[6] || "",
-    version: match[7] ? `r${match[7]}` : "",
-  };
-}
-
 function isArchiveFile(file) {
-  return Boolean(file && /(?:\.zip|\.tar\.gz|\.tgz)$/i.test(file.name));
+  return Boolean(file && /(?:\.zip|\.tar\.gz)$/i.test(file.name));
 }
 
-// Archive identity (institution/model/event/poc/config/version) is parsed
+// Archive identity is parsed
 // entirely from the file name - the server is authoritative here too and
 // overwrites anything the form would otherwise send, so both sides must
 // agree on the pattern. Rather than keep a second hand-written regex in
@@ -464,12 +482,20 @@ function parseArchiveName(name) {
   const pattern = new RegExp(state.constants.archive_name_pattern);
   const match = name.match(pattern);
   if (!match) return null;
-  const [, institution, model, event, poc, config, version] = match;
-  return {institution, model, event, poc, config, version: `r${version}`};
+  const [, institution, model, event, poc, config, member] = match;
+  return {
+    institution,
+    model,
+    event,
+    poc,
+    config: config || "",
+    member: member || "",
+  };
 }
 
-const ARCHIVE_NAME_ERROR = "Archive name must be <INSTITUTE>-<MODEL>-<EVENT>-<POC>-" +
-  "<CONFIG>-r<NN>.tar.gz, for example HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz. " +
+const ARCHIVE_NAME_ERROR = "Archive name must be <INST>-<MODEL>-<EVENT>-<POC>" +
+  "[-CONFIG<NN>][-MEM<NN>].tar.gz or .zip, for example " +
+  "HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz. " +
   "Fields must be uppercase letters and digits without hyphens, so a model such as WRF-ARW " +
   "is written WRFARW.";
 
@@ -479,7 +505,7 @@ const IDENTITY_FIELD_IDS = [
   "identityEvent",
   "identityContact",
   "identityConfig",
-  "identityVersion",
+  "identityMember",
 ];
 
 function resetArchiveIdentityFields() {
@@ -502,71 +528,44 @@ function showArchiveIdentityError(message) {
 
 function renderArchiveIdentity(parsed) {
   formMessage("#archiveIdentityError");
-  $("#identityInstitution").textContent = state.user?.institution || "—";
+  $("#identityInstitution").textContent = parsed.institution;
   $("#identityModel").textContent = parsed.model;
   $("#identityEvent").textContent = parsed.event;
   $("#identityContact").textContent = parsed.poc;
-  $("#identityConfig").textContent = parsed.config;
-  $("#identityVersion").textContent = parsed.version;
+  $("#identityConfig").textContent = parsed.config || "—";
+  $("#identityMember").textContent = parsed.member || "—";
   setUploadSubmitEnabled(true);
 }
 
 function setUploadMode(file) {
   const archive = isArchiveFile(file);
-  const form = $("#uploadForm");
-  const singleFileFields = $("#singleFileFields");
-  singleFileFields.classList.toggle("hidden", archive);
   $("#archiveIdentity").classList.toggle("hidden", !archive);
-  // The single-file-only fields are disabled (not just hidden) in archive
-  // mode so formDataObject(form) - a plain FormData read - naturally leaves
-  // them out of the upload_start payload instead of sending a pile of blank
-  // fields the server would just ignore.
-  $$("input, select, textarea", singleFileFields).forEach((field) => {
-    field.disabled = archive;
-  });
-  $$(".single-file-time", form).forEach((label) => {
-    label.classList.toggle("hidden", archive);
-    const input = $("input", label);
-    input.disabled = archive;
-    input.required = !archive && input.dataset.requiredSingle === "true";
-  });
-  $("#fileModeHint").textContent = archive
-    ? "Structured archive: identity below is read from the archive name; one event per archive."
-    : ".nc for a single snapshot, or .zip/.tar.gz for a structured archive.";
+  $("#fileSelection").textContent = file?.name || "No archive selected";
+  $("#fileModeHint").textContent =
+    "Upload a .zip or .tar.gz structured archive containing the required NetCDF files and Participant_Model_Documentation.pdf.";
   if (archive) {
     resetArchiveIdentityFields();
     formMessage("#archiveIdentityError");
     setUploadSubmitEnabled(false);
   } else {
-    formMessage("#archiveIdentityError");
-    setUploadSubmitEnabled(true);
+    resetArchiveIdentityFields();
+    if (file) {
+      showArchiveIdentityError("Only .zip and .tar.gz structured archives are accepted.");
+    } else {
+      formMessage("#archiveIdentityError");
+      setUploadSubmitEnabled(false);
+    }
   }
 }
 
 function autoFillFromFile(file) {
-  if (isArchiveFile(file)) {
-    const parsed = parseArchiveName(file.name);
-    if (!parsed) {
-      showArchiveIdentityError(ARCHIVE_NAME_ERROR);
-      return;
-    }
-    renderArchiveIdentity(parsed);
+  if (!isArchiveFile(file)) return;
+  const parsed = parseArchiveName(file.name);
+  if (!parsed) {
+    showArchiveIdentityError(ARCHIVE_NAME_ERROR);
     return;
   }
-  const parsed = parseFileName(file.name);
-  if (!parsed) return;
-  const form = $("#uploadForm");
-  form.elements.experiment.value = parsed.experiment;
-  form.elements.model.value = parsed.model;
-  form.elements.event.value = parsed.event;
-  form.elements.member.value = parsed.member;
-  form.elements.version.value = parsed.version;
-  const experimentParts = parsed.experiment.split("-");
-  const mode = experimentParts.at(-1);
-  if (mode === "AN" || mode === "FC") {
-    form.elements.forcing_mode.value = mode === "AN" ? "analysis" : "forecast";
-    form.elements.forcing_source.value = experimentParts.slice(1, -1).join("-");
-  }
+  renderArchiveIdentity(parsed);
 }
 
 function setProgress(done, total, label) {
@@ -601,6 +600,14 @@ function showUploadOutcome(upload) {
     const message = archive && Number.isFinite(checked)
       ? `${upload.file_name} passed structured archive validation: ${passed}/${checked} NetCDF files across ${initFolders} initialization directories.`
       : `${upload.file_name} passed validation and is now stored as the active submission.`;
+    const extractionStatus = upload.extraction_status || (archive ? "queued" : "not_applicable");
+    const extractionNote = archive && extractionStatus === "ready"
+      ? " The archive has also been unpacked for analysis."
+      : archive && extractionStatus === "failed"
+        ? ` The original archive is preserved, but the analysis copy could not be prepared: ${upload.extraction_error || "see Submissions"}`
+        : archive
+          ? " The server is preparing the private analysis copy."
+          : "";
     // Recommended variables never block a submission, but the uploader is
     // told what was not found so they can decide whether to resubmit.
     const notes = (upload.validation?.warnings || []).filter((item) =>
@@ -608,8 +615,8 @@ function showUploadOutcome(upload) {
     );
     showUploadMessage(
       notes.length ? "Submission accepted, with notes" : "Submission accepted",
-      notes.length ? `${message} The submission is stored. Please note:` : message,
-      "success",
+      notes.length ? `${message}${extractionNote} The submission is stored. Please note:` : `${message}${extractionNote}`,
+      extractionStatus === "failed" ? "warning" : "success",
       notes,
     );
     setProgress(upload.file_size, upload.file_size, "Accepted");
@@ -842,9 +849,8 @@ class UploadPausedError extends Error {
   }
 }
 
-async function startUpload(metadata, file, replaceUploadId = "") {
+async function startUpload(file, replaceUploadId = "") {
   return api("upload_start", {
-    ...metadata,
     file_name: file.name,
     file_size: file.size,
     replace_upload_id: replaceUploadId,
@@ -1140,7 +1146,6 @@ async function resumeUploadFromRecord() {
 
 async function submitUpload(event) {
   event.preventDefault();
-  const form = event.currentTarget;
   const file = $("#fileInput").files[0];
   if (!file) {
     toast("Select a file first", "error");
@@ -1151,13 +1156,11 @@ async function submitUpload(event) {
   setProgress(0, file.size, "Preparing");
   await withUploadButtonDisabled(async () => {
     try {
-      const metadata = formDataObject(form);
-      delete metadata.file;
       let uploadId;
       let chunkSize = (state.constants && state.constants.chunk_size) || (8 * 1024 * 1024);
       let startOffset = 0;
       try {
-        const start = await startUpload(metadata, file);
+        const start = await startUpload(file);
         uploadId = start.upload_id;
         chunkSize = start.chunk_size || chunkSize;
       } catch (err) {
@@ -1183,7 +1186,7 @@ async function submitUpload(event) {
             setProgress(0, file.size, "Cancelled");
             return;
           }
-          const start = await startUpload(metadata, file, existing.upload_id);
+          const start = await startUpload(file, existing.upload_id);
           uploadId = start.upload_id;
           chunkSize = start.chunk_size || chunkSize;
         } else {
@@ -1226,17 +1229,8 @@ async function createUser(event) {
   }
 }
 
-async function updateUser(id, status = null, role = null) {
-  const payload = {id};
-  if (status) payload.status = status;
-  if (role) payload.role = role;
-  await api("admin_update_user", payload);
-  state.adminLoaded = false;
-  await loadAdmin();
-}
-
-async function deleteUser(id) {
-  await api("admin_delete_user", {id});
+async function updateUserRole(id, role) {
+  await api("admin_update_user", {id, role});
   state.adminLoaded = false;
   await loadAdmin();
 }
@@ -1255,21 +1249,6 @@ async function addWhitelist(event) {
   }
 }
 
-async function submitProfile(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  formMessage("#profileMessage");
-  try {
-    const data = await api("update_profile", formDataObject(form));
-    state.user = data.user;
-    setView();
-    toast("Submission identity saved");
-  } catch (err) {
-    formMessage("#profileMessage", err.message, "error");
-    toast(err.message, "error");
-  }
-}
-
 async function changePassword(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -1282,9 +1261,35 @@ async function changePassword(event) {
   }
 }
 
+async function submitPasswordReset(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = formDataObject(form);
+  if (values.new_password !== values.confirm_password) {
+    formMessage("#resetMessage", "New passwords do not match.", "error");
+    return;
+  }
+  delete values.confirm_password;
+  formMessage("#resetMessage");
+  try {
+    const data = await api("password_reset", values);
+    hidePasswordReset();
+    $("#loginForm input[name='email']").value = values.email;
+    formMessage("#loginMessage", data.message || "Password reset complete");
+    toast(data.message || "Password reset complete");
+  } catch (err) {
+    formMessage("#resetMessage", err.message, "error");
+    toast(err.message, "error");
+  }
+}
+
 function bindEvents() {
   $("#loginForm").addEventListener("submit", submitLogin);
   $("#registerForm").addEventListener("submit", submitRegister);
+  $("#forgotPasswordBtn").addEventListener("click", showPasswordReset);
+  $("#closeResetBtn").addEventListener("click", hidePasswordReset);
+  $("#cancelResetBtn").addEventListener("click", hidePasswordReset);
+  $("#passwordResetForm").addEventListener("submit", submitPasswordReset);
   $("#logoutBtn").addEventListener("click", logout);
   $$(".tab").forEach((tab) => tab.addEventListener("click", () => activateTab(tab.dataset.tab)));
   $("#uploadForm").addEventListener("submit", submitUpload);
@@ -1316,7 +1321,8 @@ function bindEvents() {
   const dropzone = $(".dropzone");
   const fileInput = $("#fileInput");
   dropzone.addEventListener("click", (event) => {
-    if (event.target !== fileInput) fileInput.click();
+    if (event.target === fileInput || event.target.closest("label[for='fileInput']")) return;
+    fileInput.click();
   });
   ["dragenter", "dragover"].forEach((name) => dropzone.addEventListener(name, (event) => {
     event.preventDefault();
@@ -1351,23 +1357,7 @@ function bindEvents() {
   });
   $("#createUserForm").addEventListener("submit", createUser);
   $("#whitelistForm").addEventListener("submit", addWhitelist);
-  $("#profileForm").addEventListener("submit", submitProfile);
   $("#passwordForm").addEventListener("submit", changePassword);
-  $("#usersBody").addEventListener("click", async (event) => {
-    const button = event.target.closest("button[data-action]");
-    if (!button) return;
-    try {
-      const id = Number(button.dataset.id);
-      if (button.dataset.action === "disable" && !window.confirm("Disable this user account?")) return;
-      if (button.dataset.action === "delete" && !window.confirm("Delete this user account? This cannot be undone in the portal.")) return;
-      if (button.dataset.action === "approve") await updateUser(id, "approved");
-      if (button.dataset.action === "disable") await updateUser(id, "disabled");
-      if (button.dataset.action === "delete") await deleteUser(id);
-      toast("User updated");
-    } catch (err) {
-      toast(err.message, "error");
-    }
-  });
   $("#usersBody").addEventListener("change", async (event) => {
     const select = event.target.closest("select[data-role]");
     if (!select) return;
@@ -1376,7 +1366,7 @@ function bindEvents() {
         await loadAdmin();
         return;
       }
-      await updateUser(Number(select.dataset.role), null, select.value);
+      await updateUserRole(Number(select.dataset.role), select.value);
       toast("Role updated");
     } catch (err) {
       toast(err.message, "error");
@@ -1404,6 +1394,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     state,
     bytes,
+    parseArchiveName,
     api,
     fetchUploadStatus,
     isTerminalUploadStatus,

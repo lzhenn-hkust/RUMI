@@ -153,11 +153,11 @@ before accepting a submission.
 
 Phase 1 submissions are uploaded as one archive per event. The authoritative
 specification is [docs/RUMI-submission-spec-v3.md](docs/RUMI-submission-spec-v3.md)
-(`RULES_VERSION: 2026-08-rumi-v3`); the text below is a summary.
+(`RULES_VERSION: 2026-08-rumi-v3.2`); the text below is a summary.
 
 ```text
-HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
-`-- HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz
+`-- HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/
     |-- Participant_Model_Documentation.pdf
     |-- rumi_manifest.json          (written by rumi_validate.py, optional)
     |-- ERA5-AN/
@@ -166,8 +166,9 @@ HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
         |-- Init-5/ ... `-- Init-0.25/
 ```
 
-- The archive name is `<INSTITUTE>-<MODEL>-<EVENT>-<POC>-<CONFIG>-r<NN>`
-  with `.tar.gz`, `.tgz`, or `.zip`. Fields are uppercase letters and digits and
+- The archive name is `<INSTITUTE>-<MODEL>-<EVENT>-<POC>[-CONFIG<NN>][-MEM<NN>]`
+  with `.tar.gz` or `.zip`. Configuration and ensemble member suffixes are
+  optional and appear in that order. Fields are uppercase letters and digits and
   contain no hyphens, so `WRF-ARW` is written `WRFARW`.
 - Every NetCDF file sits at `<archive>/<EXPERIMENT>/<Init-*>/<file>.nc`.
   Experiment directories use the canonical identifiers (`ERA5-AN`,
@@ -185,8 +186,8 @@ HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01.tar.gz
 the same `RULES_VERSION` as the portal itself:
 
 ```bash
-python3 rumi_validate.py HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
-python3 rumi_validate.py --write-manifest HKUST-MPAS-HRAIN2025-LIU-CONFIG01-r01/
+python3 rumi_validate.py HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/
+python3 rumi_validate.py --write-manifest HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/
 ```
 
 It is generated from `portal/backend/rumi_protocol.py` by
@@ -206,6 +207,8 @@ directory structure:
 ```text
 single files: submissions/<institution>/<experiment>/<model>/<event>/<upload_id>_<file-name>
 archives:     submissions/<institution>/<event>/<model>/<upload_id>_<archive-name>
+analysis:     extracted/<institution>/<event>/<model>/<upload_id>/<archive contents>
+manifests:    manifests/<institution>/<event>/<model>/<upload_id>.json
 ```
 
 An event archive spans several experiments, so it cannot be filed under one of
@@ -217,3 +220,12 @@ is also stored as a snapshot on each upload record, so changing a user's
 profile later does not change the historical attribution or storage location.
 Older submissions retain their original storage paths and remain accessible
 through the database index.
+
+The uploaded archive is the immutable source of truth. After a successful
+archive validation, the background worker creates a private, independently
+indexed analysis copy under `extracted/` and writes a server-generated manifest
+under `manifests/`. Extraction is staged and checks member paths, links,
+duplicates, and expanded size before the derived copy becomes visible. The
+database records `extraction_status` (`queued`, `extracting`, `ready`, or
+`failed`) plus the derived paths and file counts; a failed extraction never
+removes the accepted original archive.

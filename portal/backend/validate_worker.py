@@ -9,6 +9,8 @@ own session; the browser follows along through the `upload_status` action.
 Run as:  python3 validate_worker.py --upload-id <id>
 """
 import argparse
+from contextlib import contextmanager
+import fcntl
 import os
 import sys
 import time
@@ -18,8 +20,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from portal_lib import (  # noqa: E402
     connect_db,
+    extract_archive,
     finalize_upload,
     log_exception,
+    LOG_DIR,
+    PRIVATE_DIR_MODE,
+    PRIVATE_FILE_MODE,
+    set_extraction_status,
     sha256_file,
     upload_record_public,
     utcnow,
@@ -30,6 +37,36 @@ import json  # noqa: E402
 
 HEARTBEAT_EVERY_FILES = 20
 HEARTBEAT_EVERY_SECONDS = 20.0
+
+
+@contextmanager
+def validation_slot():
+    """Serialize archive validation so uploads cannot spawn unlimited ncdump work."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        LOG_DIR.chmod(PRIVATE_DIR_MODE)
+    except OSError:
+        pass
+    fd = os.open(
+        LOG_DIR / "validation.lock",
+        os.O_RDWR | os.O_CREAT,
+        PRIVATE_FILE_MODE,
+    )
+    try:
+        try:
+            os.fchmod(fd, PRIVATE_FILE_MODE)
+        except PermissionError:
+            pass
+        lock = os.fdopen(fd, "a+", encoding="ascii")
+    except Exception:
+        os.close(fd)
+        raise
+    with lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def claim(con, upload_id):
@@ -95,7 +132,29 @@ def record_server_error(con, upload_id, message):
     con.commit()
 
 
+def make_extraction_reporter(con, upload_id):
+    state = {"last": 0.0}
+
+    def report(done, total):
+        now = time.monotonic()
+        if done != total and now - state["last"] < HEARTBEAT_EVERY_SECONDS:
+            return
+        state["last"] = now
+        con.execute(
+            "UPDATE uploads SET worker_heartbeat = ?, updated_at = ? WHERE upload_id = ?",
+            (utcnow(), utcnow(), upload_id),
+        )
+        con.commit()
+
+    return report
+
+
 def validate_upload(upload_id):
+    with validation_slot():
+        return _validate_upload(upload_id)
+
+
+def _validate_upload(upload_id):
     with connect_db() as con:
         row = claim(con, upload_id)
         if row is None:
@@ -132,16 +191,39 @@ def validate_upload(upload_id):
             return 1
 
         record = finalize_upload(con, row, validation, digest)
+        extraction_error = None
+        if record["status"] == "validated" and record["file_kind"] in ("zip", "tar"):
+            try:
+                set_extraction_status(con, upload_id, "extracting")
+                details = extract_archive(
+                    record,
+                    heartbeat=make_extraction_reporter(con, upload_id),
+                )
+                set_extraction_status(con, upload_id, "ready", details=details)
+            except Exception as exc:  # noqa: BLE001 - retain the accepted archive
+                request_id = log_exception(exc, context=f"extract:{upload_id}")
+                extraction_error = (
+                    "The archive passed validation and was stored, but its analysis "
+                    "copy could not be prepared. "
+                    f"Reference: {request_id}"
+                )
+                set_extraction_status(
+                    con,
+                    upload_id,
+                    "failed",
+                    error=extraction_error,
+                )
         elapsed = time.time() - started
         summary = validation.get("summary", {})
         print(
             f"upload_id={upload_id} status={record['status']} "
             f"files={summary.get('checked_netcdf_files', 0)} "
             f"passed={summary.get('passed_netcdf_files', 0)} "
+            f"extraction={record['extraction_status'] if not extraction_error else 'failed'} "
             f"errors={len(validation.get('errors', []))} "
             f"seconds={elapsed:.1f}"
         )
-        return 0
+        return 1 if extraction_error else 0
 
 
 def main(argv=None):
