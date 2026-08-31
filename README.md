@@ -85,18 +85,19 @@ Additional 2D and 3D fields are defined in `create_ncdf.py`.
 
 - Format: NetCDF4
 - Conventions: CF-1.8
-- Time: one timestamp per file, expressed in UTC
+- Time: exactly one timestamp per file, expressed in UTC; submit different
+  timestamps as separate NetCDF files
 - Compression: zlib
 - Missing value: `-9999.0`
 
-### Filename
+### NetCDF Member Filename
 
 ```text
 <experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_<member>][_rNN].nc
 ```
 
-The experiment is the complete forcing and mode tag. `AN` means
-analysis/reanalysis driven, while `FC` means forecast driven.
+The experiment is the forcing and mode tag. `AN` means analysis/reanalysis
+driven, while `FC` means forecast driven.
 
 ```text
 ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc

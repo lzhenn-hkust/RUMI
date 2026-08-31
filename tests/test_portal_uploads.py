@@ -95,6 +95,69 @@ class UploadWorkflowTests(unittest.TestCase):
             )
         )
 
+    def test_password_reset_requires_the_initial_invitation_code(self):
+        portal_lib.import_whitelist(self.con, ["modeler@example.org"])
+        portal_lib.set_setting(self.con, "registration_code", "RUMI-INVITE")
+        payload = {
+            "email": "modeler@example.org",
+            "registration_code": "wrong-code",
+            "new_password": "new-password-123",
+        }
+
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_password_reset(self.con)
+
+        self.assertEqual(raised.exception.status, 403)
+        self.assertEqual(raised.exception.message, "Invalid initial invitation code.")
+
+    def test_password_reset_updates_password_and_invalidates_sessions(self):
+        portal_lib.import_whitelist(self.con, ["modeler@example.org"])
+        portal_lib.set_setting(self.con, "registration_code", "RUMI-INVITE")
+        session_token, _ = portal_lib.create_session(self.con, 1)
+        payload = {
+            "email": "modeler@example.org",
+            "registration_code": "RUMI-INVITE",
+            "new_password": "new-password-123",
+        }
+
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            result = portal_api.handle_password_reset(self.con)
+
+        row = self.con.execute(
+            "SELECT password_salt, password_hash FROM users WHERE id = 1"
+        ).fetchone()
+        session = self.con.execute(
+            "SELECT 1 FROM sessions WHERE token_hash = ?",
+            (portal_lib.token_hash(session_token),),
+        ).fetchone()
+        self.assertTrue(result["ok"])
+        self.assertIn("Password reset complete", result["message"])
+        self.assertTrue(
+            portal_lib.verify_password(
+                "new-password-123", row["password_salt"], row["password_hash"]
+            )
+        )
+        self.assertIsNone(session)
+
+    def test_password_reset_is_rate_limited(self):
+        portal_lib.import_whitelist(self.con, ["modeler@example.org"])
+        for _ in range(portal_api.PASSWORD_RESET_MAX_FAILED_ATTEMPTS):
+            portal_api.record_auth_attempt(
+                self.con, "password_reset", "modeler@example.org", False
+            )
+        payload = {
+            "email": "modeler@example.org",
+            "registration_code": "RUMI-INVITE",
+            "new_password": "new-password-123",
+        }
+
+        with mock.patch.object(portal_api, "read_json", return_value=payload):
+            with self.assertRaises(portal_lib.PortalError) as raised:
+                portal_api.handle_password_reset(self.con)
+
+        self.assertEqual(raised.exception.status, 429)
+
     def tearDown(self):
         self.con.close()
         self.patches.close()
@@ -323,6 +386,23 @@ class UploadWorkflowTests(unittest.TestCase):
                 portal_api.handle_upload_start(self.con)
 
         self.assertIn("WRFARW", raised.exception.message)
+
+    def test_new_uploads_reject_single_files_and_tgz_archives(self):
+        for file_name in (
+            "GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+            "HKUST-MODEL-HRAIN2025-MODELER.tgz",
+        ):
+            with self.subTest(file_name=file_name):
+                with mock.patch.object(
+                    portal_api,
+                    "read_json",
+                    return_value={"file_name": file_name, "file_size": 123},
+                ):
+                    with self.assertRaises(portal_lib.PortalError) as raised:
+                        portal_api.handle_upload_start(self.con)
+
+                self.assertEqual(raised.exception.status, 400)
+                self.assertEqual(raised.exception.details["code"], "archive_only")
 
     def test_identical_content_is_rejected_as_duplicate(self):
         digest = portal_lib.hashlib.sha256(b"same").hexdigest()
@@ -649,6 +729,27 @@ class NetcdfValidationTests(unittest.TestCase):
 
         self.assertIsNone(parsed)
 
+    def test_archive_name_uses_only_four_identity_fields(self):
+        parsed = portal_lib.parse_archive_name("HKUST-MPAS-HRAIN2025-SHI.tar.gz")
+
+        self.assertEqual(
+            {key: parsed[key] for key in ("institution", "model", "event", "poc")},
+            {
+                "institution": "HKUST",
+                "model": "MPAS",
+                "event": "HRAIN2025",
+                "poc": "SHI",
+            },
+        )
+        self.assertEqual(parsed["config"], "")
+        self.assertEqual(parsed["version"], "")
+        self.assertIsNone(
+            portal_lib.parse_archive_name(
+                "HKUST-MPAS-HRAIN2025-SHI-CONFIG01-r01.tar.gz"
+            )
+        )
+        self.assertIsNone(portal_lib.parse_archive_name("HKUST-MPAS-HRAIN2025-SHI.tgz"))
+
     def test_coordinate_dump_requests_full_precision(self):
         completed = mock.Mock(
             returncode=0,
@@ -722,6 +823,49 @@ class NetcdfValidationTests(unittest.TestCase):
             )
 
         self.assertIn("Missing core 2D variables: T2M", result["errors"])
+
+    def test_multiple_time_steps_are_rejected(self):
+        declarations = "\n".join(
+            f"float {name}(time, lat, lon) ;"
+            for name in portal_lib.CORE_2D_VARS
+        )
+        header = f"""
+        dimensions:
+            time = 2 ;
+            lat = 171 ;
+            lon = 234 ;
+        variables:
+            {declarations}
+        """
+        with (
+            mock.patch.object(portal_lib, "netcdf_kind", return_value="netCDF-4"),
+            mock.patch.object(portal_lib, "netcdf_header", return_value=header),
+            mock.patch.object(
+                portal_lib,
+                "netcdf_coordinates",
+                return_value=self.core_coordinates(),
+            ),
+        ):
+            result = portal_lib.validate_netcdf(
+                Path("multi-time.nc"),
+                "RUMI-GFS-FC-MODEL-HRAIN2025-20250804000000.nc",
+                {
+                    "experiment": "RUMI-GFS-FC",
+                    "model": "MODEL",
+                    "event": "HRAIN2025",
+                },
+            )
+
+        self.assertIn(
+            "Each NetCDF file must contain exactly one time step "
+            "(time dimension = 1); received 2.",
+            result["errors"],
+        )
+
+    def test_unlimited_one_step_time_dimension_is_accepted(self):
+        header = "dimensions: time = UNLIMITED ; // (1 currently)"
+
+        self.assertEqual(portal_lib.header_dim(header, "time"), 1)
 
     def test_filename_metadata_mismatch_is_an_error(self):
         declarations = "\n".join(
