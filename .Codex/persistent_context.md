@@ -1,6 +1,6 @@
 # RUMI Portal Persistent Context
 
-Last verified: 2026-08-31
+Last verified: 2026-09-08
 
 ## Local Repository
 
@@ -233,6 +233,26 @@ The SQLite database is the authoritative index. Institution is stored as a submi
 
 
 ## Deployment log
+
+- **2026-09-08** — RUMI protocol v3.3
+  (`RULES_VERSION: 2026-09-rumi-v3.3`) deployed from Git commit `f8a4752`.
+  NetCDF creation no longer reads or writes submission `version`, and the
+  validator no longer requires that global attribute. Forcing dataset version
+  metadata is unchanged. NetCDF names accept only the optional lowercase
+  `_memNN` suffix (at least two digits); revision suffixes are rejected.
+  Archive `-CONFIGNN` / `-MEMNN` suffixes are unchanged. For all five events,
+  the sub-km minimum period now ends at peak impact end, without the extra
+  12 hours; ~1 km periods are unchanged. Download scripts, template, and
+  frontend naming text are synchronized.
+  Verified: 149 tests passed, including real NetCDF archives checked by both
+  the backend and standalone validator, all five peak-period boundaries,
+  15-minute output, missing-end rejection, and legacy-suffix rejection.
+  Staging Python compilation and real archive validation passed on hqlx74.
+  Production API reports v3.3, all three download SHA-256 hashes match local
+  artifacts, desktop/mobile browser checks pass without console errors,
+  private data returns 403, and the old URL returns 308 to production.
+  No database/schema or historical submission changes were made.
+  Code backup: `/home/lzhenn/RUMI-code-backup-20260908-v33.tar.gz`.
 
 - **2026-08-31** — RUMI protocol v3.2
   (`RULES_VERSION: 2026-08-rumi-v3.2`) deployed from Git commit `6d805b6`.
