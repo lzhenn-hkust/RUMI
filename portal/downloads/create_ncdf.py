@@ -21,6 +21,8 @@ Usage:
       3. Run the script
 
 Changelog:
+  v2.4 (2026-09-08): Removed submission revision metadata. Ensemble files
+                      may use the optional _memNN filename suffix.
   v2.3 (2026-08-19): Dropped the "RUMI-" prefix from experiment identifiers
                       and output file names (e.g. "RUMI-ERA5-AN" ->
                       "ERA5-AN"), and switched the version token from "vNN"
@@ -44,7 +46,7 @@ Changelog:
 '''
 
 __title__   = 'RUMI NetCDF creation script'
-__version__ = 'v2.3 (2026-08-19)'
+__version__ = 'v2.4 (2026-09-08)'
 __author__  = 'Zhenning LI'
 
 import numpy as np
@@ -196,7 +198,6 @@ def set_info():
         'contact':        'your.email@institution.edu',
         'creator_name':   'Your Name',
         'creation_date':  datetime.now(timezone.utc).strftime('%Y-%m-%d'),
-        'version':        'r01',
 
         # Physics parameterizations (update for your model)
         'microphysics_scheme':    'Morrison double-moment',
@@ -402,7 +403,6 @@ def create_rumi_netcdf(info, include_recommended=True, include_3d=True):
         ds.contact       = info['contact']
         ds.creator_name  = info['creator_name']
         ds.creation_date = info['creation_date']
-        ds.version       = info['version']
 
         # Physics (update for your model)
         ds.microphysics_scheme     = info['microphysics_scheme']

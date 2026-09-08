@@ -71,28 +71,28 @@ class RequiredPeriodTests(unittest.TestCase):
         expected = {
             "MANGKHUT2018": {
                 "km": ("2018-09-15T00:00:00Z", "2018-09-17T00:00:00Z"),
-                "subkm": ("2018-09-16T00:00:00Z", "2018-09-17T00:00:00Z"),
+                "subkm": ("2018-09-16T00:00:00Z", "2018-09-16T12:00:00Z"),
             },
             "HRAIN2023": {
                 "km": ("2023-09-06T00:00:00Z", "2023-09-09T00:00:00Z"),
-                "subkm": ("2023-09-07T14:00:00Z", "2023-09-08T20:00:00Z"),
+                "subkm": ("2023-09-07T14:00:00Z", "2023-09-08T08:00:00Z"),
             },
             "HRAIN2025": {
                 "km": ("2025-08-03T00:00:00Z", "2025-08-06T00:00:00Z"),
-                "subkm": ("2025-08-04T21:00:00Z", "2025-08-06T00:00:00Z"),
+                "subkm": ("2025-08-04T21:00:00Z", "2025-08-05T12:00:00Z"),
             },
             "HEAT2022": {
                 "km": ("2022-07-22T00:00:00Z", "2022-07-25T00:00:00Z"),
-                "subkm": ("2022-07-23T00:00:00Z", "2022-07-25T00:00:00Z"),
+                "subkm": ("2022-07-23T00:00:00Z", "2022-07-24T12:00:00Z"),
             },
             "HEAT2024": {
                 "km": ("2024-08-27T00:00:00Z", "2024-08-29T00:00:00Z"),
-                "subkm": ("2024-08-28T00:00:00Z", "2024-08-29T00:00:00Z"),
+                "subkm": ("2024-08-28T00:00:00Z", "2024-08-28T12:00:00Z"),
             },
         }
         self.assertEqual(rumi_protocol.REQUIRED_PERIODS, expected)
 
-    def test_subkm_period_starts_at_peak_and_ends_12h_after(self):
+    def test_subkm_period_covers_only_peak_impact(self):
         for event, info in rumi_protocol.EVENTS.items():
             peak_start = rumi_protocol.parse_utc(info["peak_start"])
             peak_end = rumi_protocol.parse_utc(info["peak_end"])
@@ -104,17 +104,17 @@ class RequiredPeriodTests(unittest.TestCase):
             )
             self.assertEqual(
                 subkm_end,
-                rumi_protocol.iso_z(peak_end + dt.timedelta(hours=12)),
+                rumi_protocol.iso_z(peak_end),
                 msg=f"{event} subkm end",
             )
 
     def test_subkm_timestamp_counts_match_agreed_table(self):
         expected_counts = {
-            "MANGKHUT2018": 25,
-            "HRAIN2023": 31,
-            "HRAIN2025": 28,
-            "HEAT2022": 49,
-            "HEAT2024": 25,
+            "MANGKHUT2018": 13,
+            "HRAIN2023": 19,
+            "HRAIN2025": 16,
+            "HEAT2022": 37,
+            "HEAT2024": 13,
         }
         for event, count in expected_counts.items():
             with self.subTest(event=event):
@@ -484,39 +484,42 @@ class ValidateNetcdfFactsTests(unittest.TestCase):
 
         self.assert_message(result["errors"], "is not a RUMI experiment identifier")
 
-    def test_v_style_version_suffix_warns(self):
-        # A version written the old way (_v02) parses as a member label, not
-        # a version, and is reported so the participant can rename to _r02.
+    def test_revision_metadata_is_not_required(self):
         facts = make_compliant_facts()
+        facts["attributes"].pop("version", None)
+        result = rumi_protocol.validate_netcdf_facts(COMPLIANT_FACTS_FILENAME, facts)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["warnings"], [])
 
-        result = rumi_protocol.validate_netcdf_facts(
-            "ERA5-AN-MPAS-HRAIN2025-20250803000000_v02.nc", facts
-        )
+    def test_removed_suffixes_report_current_naming_rule(self):
+        for suffix in ("_v02", "_r02", "_mem01_r02", "_MEM01"):
+            with self.subTest(suffix=suffix):
+                result = rumi_protocol.validate_netcdf_facts(
+                    COMPLIANT_FACTS_FILENAME[:-3] + suffix + ".nc",
+                    make_compliant_facts(),
+                )
+                self.assert_message(result["errors"], "[_memNN].nc")
+                self.assert_no_message(result["errors"] + result["warnings"], "_rNN")
 
-        self.assert_message(result["warnings"], "member label")
 
+class ParseRumiFilenameMemberSuffixTests(unittest.TestCase):
+    def test_optional_member_suffix(self):
+        for suffix, member in (("", ""), ("_mem01", "mem01"), ("_mem123", "mem123")):
+            with self.subTest(suffix=suffix):
+                parsed = rumi_protocol.parse_rumi_filename(
+                    "GFS-FC-WRFARW-HEAT2024-20240828000000" + suffix + ".nc"
+                )
+                self.assertIsNotNone(parsed)
+                self.assertEqual(parsed["member"], member)
+                self.assertNotIn("version", parsed)
 
-class ParseRumiFilenameVersionSuffixTests(unittest.TestCase):
-    """Regression coverage for a real bug: '_r02' used to be swallowed
-    whole by the member group instead of being recognized as a version
-    suffix, and a member name containing an underscore right before '_rNN'
-    used to lose part of its name to the version parser."""
-
-    def test_r_suffix_is_parsed_as_version_not_member(self):
-        parsed = rumi_protocol.parse_rumi_filename(
-            "GFS-FC-WRFARW-HEAT2024-20240828000000_r02.nc"
-        )
-        self.assertIsNotNone(parsed)
-        self.assertEqual(parsed["member"], "")
-        self.assertEqual(parsed["version"], "02")
-
-    def test_member_with_underscores_keeps_its_name_before_r_suffix(self):
-        parsed = rumi_protocol.parse_rumi_filename(
-            "ERA5-AN-WRF-MANGKHUT2018-20180916120000_mem_01_r03.nc"
-        )
-        self.assertIsNotNone(parsed)
-        self.assertEqual(parsed["member"], "mem_01")
-        self.assertEqual(parsed["version"], "03")
+    def test_nonstandard_suffixes_rejected(self):
+        for suffix in ("_r01", "_v01", "_mem_01", "_MEM01", "_mem1", "_member01",
+                       "_mem01_r02", "_mem01_mem02", "_mem01x"):
+            with self.subTest(suffix=suffix):
+                self.assertIsNone(rumi_protocol.parse_rumi_filename(
+                    "ERA5-AN-WRF-MANGKHUT2018-20180916120000" + suffix + ".nc"
+                ))
 
 
 class InitTimeForTests(unittest.TestCase):

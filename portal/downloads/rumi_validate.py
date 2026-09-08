@@ -60,7 +60,7 @@ except Exception:  # pragma: no cover - exercised only without the package
 # tools/build_validator.py.
 # ============================================================================
 
-"""Shared RUMI submission protocol rules (v3.2).
+"""Shared RUMI submission protocol rules (v3.3).
 
 This module is the single source of truth for the RUMI event calendar,
 required submission time coverage, initialization-time labels, experiment
@@ -86,7 +86,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-RULES_VERSION = "2026-08-rumi-v3.2"
+RULES_VERSION = "2026-09-rumi-v3.3"
 OUTPUT_INTERVAL_HOURS = 1
 
 # ---------------------------------------------------------------------------
@@ -156,23 +156,23 @@ EVENTS: Dict[str, Dict[str, str]] = {
 REQUIRED_PERIODS: Dict[str, Dict[str, Tuple[str, str]]] = {
     "MANGKHUT2018": {
         "km": ("2018-09-15T00:00:00Z", "2018-09-17T00:00:00Z"),
-        "subkm": ("2018-09-16T00:00:00Z", "2018-09-17T00:00:00Z"),
+        "subkm": ("2018-09-16T00:00:00Z", "2018-09-16T12:00:00Z"),
     },
     "HRAIN2023": {
         "km": ("2023-09-06T00:00:00Z", "2023-09-09T00:00:00Z"),
-        "subkm": ("2023-09-07T14:00:00Z", "2023-09-08T20:00:00Z"),
+        "subkm": ("2023-09-07T14:00:00Z", "2023-09-08T08:00:00Z"),
     },
     "HRAIN2025": {
         "km": ("2025-08-03T00:00:00Z", "2025-08-06T00:00:00Z"),
-        "subkm": ("2025-08-04T21:00:00Z", "2025-08-06T00:00:00Z"),
+        "subkm": ("2025-08-04T21:00:00Z", "2025-08-05T12:00:00Z"),
     },
     "HEAT2022": {
         "km": ("2022-07-22T00:00:00Z", "2022-07-25T00:00:00Z"),
-        "subkm": ("2022-07-23T00:00:00Z", "2022-07-25T00:00:00Z"),
+        "subkm": ("2022-07-23T00:00:00Z", "2022-07-24T12:00:00Z"),
     },
     "HEAT2024": {
         "km": ("2024-08-27T00:00:00Z", "2024-08-29T00:00:00Z"),
-        "subkm": ("2024-08-28T00:00:00Z", "2024-08-29T00:00:00Z"),
+        "subkm": ("2024-08-28T00:00:00Z", "2024-08-28T12:00:00Z"),
     },
 }
 
@@ -352,7 +352,6 @@ REQUIRED_GLOBAL_ATTRS = [
     "contact",
     "creator_name",
     "creation_date",
-    "version",
 ]
 
 ARCHIVE_TIME_ATTRS = (
@@ -383,8 +382,7 @@ RUMI_FILENAME_RE = re.compile(
     r"([A-Za-z0-9._]+)-("
     + "|".join(EVENTS.keys())
     + r")-(\d{14})"
-    r"(?:_(?!r[0-9]{2,}\.nc$)((?:(?!_r[0-9]{2,}\.nc$)[A-Za-z0-9._-])+))?"
-    r"(?:_r([0-9]{2,}))?\.nc$"
+    r"(?:_(mem[0-9]{2,}))?\.nc\Z"
 )
 
 # ---------------------------------------------------------------------------
@@ -585,7 +583,7 @@ def parse_rumi_filename(name):
     match = RUMI_FILENAME_RE.match(name)
     if not match:
         return None
-    forcing, mode, model, event, stamp, member, version = match.groups()
+    forcing, mode, model, event, stamp, member = match.groups()
     try:
         ts = dt.datetime.strptime(stamp, "%Y%m%d%H%M%S").replace(tzinfo=dt.timezone.utc)
     except ValueError:
@@ -596,7 +594,6 @@ def parse_rumi_filename(name):
         "event": event,
         "timestamp": ts.isoformat().replace("+00:00", "Z"),
         "member": member or "",
-        "version": version or "",
     }
 
 
@@ -766,7 +763,7 @@ def validate_archive_structure(names, filename):
         if not parsed_name:
             errors.add(
                 "File name must follow <experiment>-<Model>-<Event>-"
-                "<YYYYMMDDHHMMSS>[_member][_rNN].nc.",
+                "<YYYYMMDDHHMMSS>[_memNN].nc.",
                 name,
             )
             member_ok = False
@@ -1096,7 +1093,7 @@ def validate_netcdf_facts(filename, facts, metadata=None):
     if not parsed:
         errors.append(
             "File name must follow <experiment>-<Model>-<Event>-"
-            "<YYYYMMDDHHMMSS>[_member][_rNN].nc, for example "
+            "<YYYYMMDDHHMMSS>[_memNN].nc, for example "
             "ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc."
         )
     else:
@@ -1105,11 +1102,6 @@ def validate_netcdf_facts(filename, facts, metadata=None):
             errors.append(
                 f"File name experiment {parsed['experiment']} is not a RUMI "
                 "experiment identifier. Use one of: " + ", ".join(EXPERIMENTS) + "."
-            )
-        if re.fullmatch(r"v[0-9]{2,}", parsed["member"] or ""):
-            warnings.append(
-                f"'_{parsed['member']}' was read as a member label, not a "
-                "version. Versions are written _r" + parsed["member"][1:] + "."
             )
         if metadata.get("experiment") and parsed["experiment"].upper() != metadata.get("experiment", "").upper():
             errors.append("File name experiment does not match the submitted metadata.")

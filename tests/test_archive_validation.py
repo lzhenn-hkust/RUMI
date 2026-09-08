@@ -452,7 +452,7 @@ class InitDirectoryTests(RumiTestCase):
         self.assert_message(result["errors"], "hours from the Init-2025080300 time")
 
     def test_subkm_resolution_selects_shorter_period(self):
-        self.assertEqual(len(SUBKM_SERIES), 28)
+        self.assertEqual(len(SUBKM_SERIES), 16)
         members = build_members(
             SUBKM_SERIES, "initialization_time", SUBKM_SERIES[0], resolution="500 m"
         )
@@ -475,6 +475,29 @@ class InitDirectoryTests(RumiTestCase):
 
         self.assert_message(result["warnings"], "could not be interpreted")
         self.assertEqual(result["coverage"]["category"], "km")
+
+    def test_all_subkm_events_accept_peak_only_and_additional_output(self):
+        for event, calendar in rumi_protocol.EVENTS.items():
+            for interval_minutes, extra_hours in ((60, 0), (15, 0), (60, 12)):
+                with self.subTest(event=event, interval=interval_minutes, extra=extra_hours):
+                    start = rumi_protocol.parse_utc(calendar["peak_start"])
+                    end = rumi_protocol.parse_utc(calendar["peak_end"])
+                    timestamp = start
+                    timestamps = []
+                    while timestamp <= end + dt.timedelta(hours=extra_hours):
+                        timestamps.append(rumi_protocol.iso_z(timestamp))
+                        timestamp += dt.timedelta(minutes=interval_minutes)
+                    members = build_members(
+                        timestamps, "initialization_time", calendar["peak_start"],
+                        resolution="500 m",
+                    )
+                    result = portal_lib.validate_init_directory(event, "ERA5-AN", "Init-0", members)
+                    self.assertEqual(result["errors"], [])
+                    self.assertEqual(result["warnings"], [])
+                    self.assertEqual(result["coverage"]["required_end"], calendar["peak_end"])
+                    without_end = [m for m in members if m["timestamp"] != calendar["peak_end"]]
+                    rejected = portal_lib.validate_init_directory(event, "ERA5-AN", "Init-0", without_end)
+                    self.assert_message(rejected["errors"], "required final timestamp")
 
     def test_staggered_fc_start_follows_actual_initialization(self):
         expected_init = rumi_protocol.INIT_TIMES["HRAIN2025"]["Init-0.25"]
@@ -532,7 +555,7 @@ class ArchiveFlowTests(RumiTestCase):
         extra_members = []
         for index in range(extra_count):
             name = (
-                f"ERA5-AN-{MODEL}-{EVENT}-{first_stamp}_member{index:04d}.nc"
+                f"ERA5-AN-{MODEL}-{EVENT}-{first_stamp}_mem{index:04d}.nc"
             )
             extra_members.append(
                 (f"{STEM}/{EXPERIMENT}/Init-0/{name}", b"fake netcdf bytes")
@@ -689,3 +712,45 @@ class RealNetcdfArchiveTests(unittest.TestCase):
             "portal and rumi_validate.py disagree on whether this archive is "
             f"acceptable:\nportal={portal_result['errors']}\nlocal={local['errors']}",
         )
+
+    def test_subkm_member_names_and_peak_end_in_real_archives(self):
+        import subprocess
+        from fixtures.make_fixture_archive import make_fixture
+
+        for suffix, drop_last, expected_error in (
+            ("_mem01", False, None),
+            ("_mem01", True, "required final timestamp"),
+            ("_r01", False, "[_memNN].nc"),
+            ("_v01", False, "[_memNN].nc"),
+            ("_mem01_r01", False, "[_memNN].nc"),
+        ):
+            with self.subTest(suffix=suffix, drop_last=drop_last):
+                with tempfile.TemporaryDirectory() as directory:
+                    fixture = make_fixture(
+                        directory, resolution="500 m", hours=2,
+                        drop_last=drop_last, real_netcdf=True,
+                    )
+                    root = fixture["root"]
+                    for path in root.rglob("*.nc"):
+                        path.rename(path.with_name(path.stem + suffix + ".nc"))
+                    archive = root.with_suffix(".zip")
+                    with zipfile.ZipFile(archive, "w") as bundle:
+                        for path in root.rglob("*"):
+                            if path.is_file():
+                                bundle.write(path, path.relative_to(root.parent))
+                    portal = portal_lib.validate_archive(
+                        archive, archive.name,
+                        {"experiment": "(archive)", "model": MODEL, "event": EVENT},
+                    )
+                    proc = subprocess.run(
+                        [sys.executable, str(ROOT / "portal/downloads/rumi_validate.py"),
+                         "--json", str(archive)],
+                        capture_output=True, text=True, timeout=120,
+                    )
+                    self.assertEqual(proc.returncode, 1 if expected_error else 0, proc.stdout + proc.stderr)
+                    local = json.loads(proc.stdout)
+                    for result in (portal, local):
+                        if expected_error:
+                            self.assertTrue(any(expected_error in error for error in result["errors"]), result)
+                        else:
+                            self.assertEqual(result["errors"], [])

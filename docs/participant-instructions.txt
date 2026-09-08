@@ -1,7 +1,7 @@
 ================================================================================
 RUMI PHASE 1 - HOW TO PREPARE AND SUBMIT YOUR SIMULATION OUTPUT
-Rules version: 2026-08-rumi-v3.2
-Portal:        https://envf.ust.hk/dataview/test/lzn/RUMI/
+Rules version: 2026-09-rumi-v3.3
+Portal:        https://envf.ust.hk/dataview/RUMI/
 Contact:       zli@ust.hk
 ================================================================================
 
@@ -130,14 +130,14 @@ Hourly output. Which window depends on your horizontal resolution.
 
   Event          ~1 km (>= 1000 m)          sub-km (< 1000 m)
   ----------------------------------------------------------------------
-  MANGKHUT2018   Sep 15 00Z - Sep 17 00Z    Sep 16 00Z - Sep 17 00Z
-  HRAIN2023      Sep 06 00Z - Sep 09 00Z    Sep 07 14Z - Sep 08 20Z
-  HRAIN2025      Aug 03 00Z - Aug 06 00Z    Aug 04 21Z - Aug 06 00Z
-  HEAT2022       Jul 22 00Z - Jul 25 00Z    Jul 23 00Z - Jul 25 00Z
-  HEAT2024       Aug 27 00Z - Aug 29 00Z    Aug 28 00Z - Aug 29 00Z
+  MANGKHUT2018   Sep 15 00Z - Sep 17 00Z    Sep 16 00Z - Sep 16 12Z
+  HRAIN2023      Sep 06 00Z - Sep 09 00Z    Sep 07 14Z - Sep 08 08Z
+  HRAIN2025      Aug 03 00Z - Aug 06 00Z    Aug 04 21Z - Aug 05 12Z
+  HEAT2022       Jul 22 00Z - Jul 25 00Z    Jul 23 00Z - Jul 24 12Z
+  HEAT2024       Aug 27 00Z - Aug 29 00Z    Aug 28 00Z - Aug 28 12Z
 
-  * The sub-km window starts at the event's peak impact start and ends 12
-    hours after the peak impact end. Any spin-up your sub-km run needs
+  * The sub-km window covers the peak impact period only. Additional output
+    after the peak impact end is accepted, not required. Any spin-up your run needs
     before that start time is your own modeling choice - it is not part of
     the required submission window and nobody checks for it.
   * The FINAL timestamp is mandatory. Its absence is an error.
@@ -160,7 +160,9 @@ Hourly output. Which window depends on your horizontal resolution.
   Core grid: 9.7 arc-second regular lat/lon, 234 lon x 171 lat,
              first lat 22.12 N, first lon 113.82 E (core domain only)
   One timestamp per file, UTC
-  Filename: <experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_member][_rNN].nc
+  Filename: <experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_memNN].nc
+  Optional ensemble suffix: lowercase _mem01, _mem02, etc. (at least two digits).
+  Archive names still use uppercase -MEM01. No submission revision suffix.
 
   Variables come in three groups. Only the first is a HARD REQUIREMENT - a
   missing core variable gets your file rejected. The other two are

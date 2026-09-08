@@ -1,6 +1,6 @@
 # RUMI Phase 1 Submission Specification v3
 
-    RULES_VERSION: 2026-08-rumi-v3.2
+    RULES_VERSION: 2026-09-rumi-v3.3
     Status:        agreed in principle; open items listed in section 10
     Supersedes:    the `lead_NNNh` archive layout described in README.md before this version
 
@@ -164,22 +164,23 @@ attribute: **~1 km** (>= 1000 m) and **sub-km** (< 1000 m).
 
 | Event | ~1 km required period | Sub-km required period | Output interval | Final timestamp |
 |---|---|---|---|---|
-| `MANGKHUT2018` | Sep 15 00Z - Sep 17 00Z | Sep 16 00Z - Sep 17 00Z | 1 h | required |
-| `HRAIN2023` | Sep 06 00Z - Sep 09 00Z | Sep 07 14Z - Sep 08 20Z | 1 h | required |
-| `HRAIN2025` | Aug 03 00Z - Aug 06 00Z | Aug 04 21Z - Aug 06 00Z | 1 h | required |
-| `HEAT2022` | Jul 22 00Z - Jul 25 00Z | Jul 23 00Z - Jul 25 00Z | 1 h | required |
-| `HEAT2024` | Aug 27 00Z - Aug 29 00Z | Aug 28 00Z - Aug 29 00Z | 1 h | required |
+| `MANGKHUT2018` | Sep 15 00Z - Sep 17 00Z | Sep 16 00Z - Sep 16 12Z | 1 h | required |
+| `HRAIN2023` | Sep 06 00Z - Sep 09 00Z | Sep 07 14Z - Sep 08 08Z | 1 h | required |
+| `HRAIN2025` | Aug 03 00Z - Aug 06 00Z | Aug 04 21Z - Aug 05 12Z | 1 h | required |
+| `HEAT2022` | Jul 22 00Z - Jul 25 00Z | Jul 23 00Z - Jul 24 12Z | 1 h | required |
+| `HEAT2024` | Aug 27 00Z - Aug 29 00Z | Aug 28 00Z - Aug 28 12Z | 1 h | required |
 
 The ~1 km column is the baseline simulation period from the guidelines. The
-sub-km required period starts at the event's peak impact start and ends 12
-hours after the peak impact end. Any spin-up a sub-km run needs before the
+sub-km required period starts at the event's peak impact start and ends at
+the peak impact end. Additional output beyond that end is accepted, not required.
+Any spin-up a sub-km run needs before the
 peak impact start is a modeling choice left to each participant; it is not
 part of the required submission window and is not itself validated.
 
 **Staggered forecast runs.** If the actual initialization time is later than the
 required start above, the required period for that run begins at the actual
 initialization time. The required final timestamp is unchanged. For example, the
-HRAIN2025 `Init-0.25` run initialized at Aug 04 15Z is required to cover
+~1 km HRAIN2025 `Init-0.25` run initialized at Aug 04 15Z is required to cover
 Aug 04 15Z to Aug 06 00Z (34 hourly files), not Aug 03 00Z to Aug 06 00Z.
 
 **Only the final timestamp is a hard requirement.** The initial timestamp is not
@@ -201,7 +202,12 @@ See `README.md` for the full grid and variable specification.
 | First lat/lon | 22.12 N, 113.82 E |
 | Time | one timestamp per file, UTC |
 | Missing value | `-9999.0` |
-| Filename | `<experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_<member>][_rNN].nc` |
+| Filename | `<experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_memNN].nc` |
+
+The optional NetCDF ensemble suffix uses lowercase `mem` and at least two
+digits, such as `_mem01`. Archive names retain uppercase `-MEM01`.
+Submission revision suffixes are not supported. A global `version` attribute
+is not required.
 
 ### Required variables
 
@@ -231,7 +237,7 @@ Required global attributes: `Conventions`, `title`, `institution`, `source`,
 `initialization_time`, `forecast_initialization_time`,
 `forecast_lead_time_hours`, `forcing_mode`, `forcing_source`, `forcing_data`,
 `forcing_data_version`, `forcing_resolution`, `forcing_update_interval`,
-`horizontal_resolution`, `contact`, `creator_name`, `creation_date`, `version`.
+`horizontal_resolution`, `contact`, `creator_name`, `creation_date`.
 
 `horizontal_resolution` is load-bearing in v3: it selects the required period
 column in section 7. Write it as `"1 km"`, `"500 m"`, `"0.5 km"` and so on.

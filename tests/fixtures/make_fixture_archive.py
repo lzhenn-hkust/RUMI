@@ -43,7 +43,7 @@ Design notes
     3. ``--drop-first`` deletes whatever is currently first.
     4. ``--drop-last`` deletes whatever is currently last.
     5. ``--duplicate`` duplicates whatever timestamp is currently last into
-       a second file with a ``_dup`` filename suffix (same timestamp).
+       a second file with a ``_mem01`` filename suffix (same timestamp).
 """
 
 import argparse
@@ -152,7 +152,6 @@ def _global_attrs(
         "contact": "fixture@example.org",
         "creator_name": "RUMI Fixture Generator",
         "creation_date": creation_date,
-        "version": f"r{version}",
         # Extra convenience attrs (not in REQUIRED_GLOBAL_ATTRS, harmless).
         "model": model,
         "config": config,
@@ -475,7 +474,7 @@ def make_fixture(
         if duplicate and working:
             last_ts = working[-1]
             base = _nc_filename(experiment, model, event, last_ts)
-            dup_name = base[:-3] + "_dup.nc"
+            dup_name = base[:-3] + "_mem01.nc"
             lead_hours = _lead_hours(last_ts, effective_init)
             attrs = _global_attrs(
                 experiment=experiment,

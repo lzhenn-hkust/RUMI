@@ -93,11 +93,13 @@ Additional 2D and 3D fields are defined in `create_ncdf.py`.
 ### NetCDF Member Filename
 
 ```text
-<experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_<member>][_rNN].nc
+<experiment>-<Model>-<Event>-<YYYYMMDDHHMMSS>[_memNN].nc
 ```
 
 The experiment is the forcing and mode tag. `AN` means analysis/reanalysis
 driven, while `FC` means forecast driven.
+The optional ensemble suffix is lowercase `_memNN` (at least two digits,
+e.g. `_mem01`). Submission revision suffixes are not used.
 
 ```text
 ERA5-AN-WRF-MANGKHUT2018-20180916120000.nc
