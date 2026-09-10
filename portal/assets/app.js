@@ -542,7 +542,7 @@ function setUploadMode(file) {
   $("#archiveIdentity").classList.toggle("hidden", !archive);
   $("#fileSelection").textContent = file?.name || "No archive selected";
   $("#fileModeHint").textContent =
-    "Upload a .zip or .tar.gz structured archive containing the required NetCDF files and Participant_Model_Documentation.pdf.";
+    "Upload a .zip or .tar.gz archive with NetCDF files and a documentation PDF/DOCX in each experiment directory.";
   if (archive) {
     resetArchiveIdentityFields();
     formMessage("#archiveIdentityError");

@@ -156,16 +156,17 @@ before accepting a submission.
 
 Phase 1 submissions are uploaded as one archive per event. The authoritative
 specification is [docs/RUMI-submission-spec-v3.md](docs/RUMI-submission-spec-v3.md)
-(`RULES_VERSION: 2026-08-rumi-v3.2`); the text below is a summary.
+(`RULES_VERSION: 2026-09-rumi-v3.4`); the text below is a summary.
 
 ```text
 HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz
 `-- HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/
-    |-- Participant_Model_Documentation.pdf
     |-- rumi_manifest.json          (written by rumi_validate.py, optional)
     |-- ERA5-AN/
+    |   |-- Participant_Model_Documentation.pdf
     |   `-- Init-0/
     `-- GFS-FC/
+        |-- Participant_Model_Documentation.pdf
         |-- Init-5/ ... `-- Init-0.25/
 ```
 
@@ -176,6 +177,9 @@ HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz
 - Every NetCDF file sits at `<archive>/<EXPERIMENT>/<Init-*>/<file>.nc`.
   Experiment directories use the canonical identifiers (`ERA5-AN`,
   `GFS-FC`), never the reversed forms.
+- Every experiment containing NetCDF files must have a documentation PDF or
+  DOCX directly inside its directory, shared by all its `Init-*` runs.
+  Root-level documentation alone is not accepted, even for one experiment.
 - `Init-*` labels index an event-specific table of initialization times; they
   are labels, not offsets. Analysis-driven runs use `Init-0`, or
   `Init-<YYYYMMDDHH>` when there are several.

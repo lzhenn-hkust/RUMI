@@ -5,11 +5,12 @@ Builds a directory tree (and, optionally, a packaged ``.tar.gz``/``.tgz``/
 ``.zip`` archive) that mimics what a participant would upload:
 
     <INST>-<MODEL>-<EVENT>-<POC>[-CONFIG<NN>][-MEM<NN>]/
-        Participant_Model_Documentation.pdf
         ERA5-AN/
+            Participant_Model_Documentation.pdf
             Init-0/
                 ERA5-AN-<MODEL>-<EVENT>-<YYYYMMDDHHMMSS>.nc
         GFS-FC/
+            Participant_Model_Documentation.pdf
             Init-1/
                 ...
             Init-0.25/
@@ -343,7 +344,7 @@ def make_fixture(
                                        # archive == "none"
             "stem": str,               # "<INST>-<MODEL>-<EVENT>-<POC>-<CONFIG>"
             "archive_name": str,       # stem + canonical extension
-            "doc": Path | None,        # Participant_Model_Documentation.pdf, or None
+            "doc": Path | None,        # first experiment's documentation, or None
             "meta_path": Path,         # OUTDIR/_fixture_meta.json
             "trees": {
                 "GFS-FC/Init-1": {
@@ -388,11 +389,6 @@ def make_fixture(
     root.mkdir(parents=True)
 
     doc_path = None
-    if not no_doc:
-        doc_path = root / "Participant_Model_Documentation.pdf"
-        doc_path.write_bytes(
-            b"%PDF-1.4\n% RUMI fixture placeholder documentation.\n%%EOF\n"
-        )
 
     creation_date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
@@ -401,6 +397,15 @@ def make_fixture(
         if "/" not in entry:
             raise ValueError(f"--tree must be EXPERIMENT/INIT, got {entry!r}")
         experiment, init_label = entry.split("/", 1)
+        if not no_doc:
+            experiment_dir = root / experiment
+            experiment_dir.mkdir(parents=True, exist_ok=True)
+            document = experiment_dir / "Participant_Model_Documentation.pdf"
+            document.write_bytes(
+                b"%PDF-1.4\n% RUMI fixture placeholder documentation.\n%%EOF\n"
+            )
+            if doc_path is None:
+                doc_path = document
 
         category = rumi_protocol.resolution_category(resolution) or "km"
         period = rumi_protocol.required_period(event, category)

@@ -1,6 +1,6 @@
 # RUMI Phase 1 Submission Specification v3
 
-    RULES_VERSION: 2026-09-rumi-v3.3
+    RULES_VERSION: 2026-09-rumi-v3.4
     Status:        agreed in principle; open items listed in section 10
     Supersedes:    the `lead_NNNh` archive layout described in README.md before this version
 
@@ -74,15 +74,16 @@ The portal supports explicit replacement, which marks the previous submission
 ```
 HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01.tar.gz
 `-- HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/     <- top directory == archive name without extension
-    |-- Participant_Model_Documentation.pdf
     |-- rumi_manifest.json                          <- written by rumi_validate.py, optional
     |
     |-- ERA5-AN/
+    |   |-- Participant_Model_Documentation.pdf
     |   `-- Init-0/
     |       |-- ERA5-AN-MPAS-HRAIN2025-20250803000000.nc
     |       `-- ...
     |
     `-- GFS-FC/
+        |-- Participant_Model_Documentation.pdf
         |-- Init-5/
         |-- Init-4/
         |-- Init-3/
@@ -100,8 +101,12 @@ Rules:
    No deeper nesting, no NetCDF files at other levels.
 3. Participants include **only** the experiments and initialization runs they
    actually completed. Empty directories are not required and not expected.
-4. `Participant_Model_Documentation.pdf` (or `.docx`) at the top level is
-   required.
+4. Every experiment containing NetCDF files requires a documentation PDF or
+   DOCX directly inside its directory, e.g.
+   `<top>/ERA5-AN/Participant_Model_Documentation.pdf`. All `Init-*` runs in
+   that experiment share the document. Root-level or Init-level documents
+   do not satisfy this rule, even for single-experiment uploads. Previously
+   accepted submissions remain unchanged; resubmissions follow the new rule.
 
 ## 5. Experiment directories
 
@@ -258,7 +263,7 @@ The portal and `rumi_validate.py` apply the same rules from the same
 | Init directory | Must match section 6 |
 | Filename consistency | Filename experiment / model / event must match the directory experiment, archive model, archive event |
 | One event per archive | All files must belong to the archive's event |
-| Documentation | A `.pdf` or `.docx` must be present at the top level |
+| Documentation | A `.pdf` or `.docx` directly in each experiment directory containing NetCDF files |
 | Final timestamp | The required final timestamp of section 7 must be present in every Init directory |
 | Duplicate timestamps | Two files with the same timestamp in one Init directory |
 | FC initialization | `forecast_initialization_time` more than 6 h from the tabled value for that `Init-*` label, except `Init-0.5` / `Init-0.25` (provisional, see Warnings) |

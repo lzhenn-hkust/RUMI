@@ -1,5 +1,5 @@
 # --- BEGIN INLINE ---
-"""Shared RUMI submission protocol rules (v3.3).
+"""Shared RUMI submission protocol rules (v3.4).
 
 This module is the single source of truth for the RUMI event calendar,
 required submission time coverage, initialization-time labels, experiment
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
-RULES_VERSION = "2026-09-rumi-v3.3"
+RULES_VERSION = "2026-09-rumi-v3.4"
 OUTPUT_INTERVAL_HOURS = 1
 
 # ---------------------------------------------------------------------------
@@ -658,15 +658,26 @@ def validate_archive_structure(names, filename):
     documentation = [
         name
         for name in names
-        if len(Path(name).parts) == 2
+        if len(Path(name).parts) == 3
         and Path(name).parts[0] == stem
+        and Path(name).parts[1] in EXPERIMENTS
         and name.lower().endswith(DOCUMENTATION_EXTENSIONS)
     ]
     summary["documentation_files"] = len(documentation)
-    if not documentation:
+    documented_experiments = {Path(name).parts[1] for name in documentation}
+    submitted_experiments = {
+        Path(name).parts[1]
+        for name in netcdf_names
+        if len(Path(name).parts) == 4
+        and Path(name).parts[0] == stem
+        and Path(name).parts[1] in EXPERIMENTS
+    }
+    for experiment in sorted(submitted_experiments - documented_experiments):
         errors.add(
-            "Participant_Model_Documentation.pdf (or .docx) must be present at "
-            "the top level of the archive."
+            f"{experiment}: Participant_Model_Documentation.pdf (or .docx) "
+            f"must be present directly in {stem}/{experiment}/, shared by its "
+            "Init-* runs. Documentation at the archive root or inside Init-* "
+            "does not satisfy this requirement."
         )
 
     for name in names:

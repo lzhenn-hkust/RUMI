@@ -129,7 +129,7 @@
               <div class="dropzone-copy">
                 <span class="dropzone-eyebrow">Structured archive</span>
                 <strong>Select submission archive</strong>
-                <span id="fileModeHint">.zip or .tar.gz containing the required NetCDF files and Participant_Model_Documentation.pdf.</span>
+                <span id="fileModeHint">.zip or .tar.gz containing NetCDF files and a documentation PDF/DOCX in each experiment directory.</span>
               </div>
               <div class="dropzone-action">
                 <label class="file-picker" for="fileInput">Browse files</label>
@@ -188,10 +188,10 @@
             <h3>Archive layout</h3>
             <p class="archive-name-pattern"><code>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;[-CONFIG&lt;NN&gt;][-MEM&lt;NN&gt;].tar.gz</code> or <code>.zip</code></p>
             <pre class="archive-layout">└─ &lt;same name&gt;/
-   ├─ Participant_Model_
-   │    Documentation.pdf
    └─ &lt;ERA5-AN|GFS-FC&gt;/
-        &lt;Init-*&gt;/*.nc</pre>
+      ├─ Participant_Model_
+      │    Documentation.pdf
+      └─ &lt;Init-*&gt;/*.nc</pre>
             <p class="muted">Run rumi_validate.py before packing.</p>
             <h3>Downloads</h3>
             <a class="download" href="api.cgi?action=download&amp;file=RUMI_template_2d.nc" download>RUMI_template_2d.nc</a>
@@ -294,7 +294,7 @@
               <dt>Frequency</dt><dd>hourly minimum, one time snapshot per file</dd>
               <dt>Format</dt><dd>NetCDF4, CF-1.8, _FillValue = -9999.0</dd>
               <dt>NetCDF members</dt><dd>&lt;FORCING&gt;-&lt;MODE&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;YYYYMMDDHHMMSS&gt;[_memNN].nc</dd>
-              <dt>Archives</dt><dd>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;[-CONFIG&lt;NN&gt;][-MEM&lt;NN&gt;].tar.gz or .zip, containing a top directory of the same name with Participant_Model_Documentation.pdf and ERA5-AN|GFS-FC/Init-*/*.nc</dd>
+              <dt>Archives</dt><dd>&lt;INST&gt;-&lt;MODEL&gt;-&lt;EVENT&gt;-&lt;POC&gt;[-CONFIG&lt;NN&gt;][-MEM&lt;NN&gt;].tar.gz or .zip, containing a top directory of the same name. Each experiment directory (e.g. ERA5-AN or GFS-FC) contains Participant_Model_Documentation.pdf (or .docx) and Init-*/*.nc. Root-level documentation alone is not accepted.</dd>
               <dt>3D fields (recommended)</dt><dd id="format3dFields">—</dd>
               <dt>Rules version</dt><dd id="rulesVersion">—</dd>
             </dl>
@@ -305,6 +305,6 @@
   </main>
 
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="assets/app.js?v=20260831-archive-options"></script>
+  <script src="assets/app.js?v=20260910-experiment-docs"></script>
 </body>
 </html>

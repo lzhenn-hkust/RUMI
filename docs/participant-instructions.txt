@@ -1,6 +1,6 @@
 ================================================================================
 RUMI PHASE 1 - HOW TO PREPARE AND SUBMIT YOUR SIMULATION OUTPUT
-Rules version: 2026-09-rumi-v3.3
+Rules version: 2026-09-rumi-v3.4
 Portal:        https://envf.ust.hk/dataview/RUMI/
 Contact:       zli@ust.hk
 ================================================================================
@@ -52,13 +52,14 @@ portal's Replace action when resubmitting a corrected archive.
 --------------------------------------------------------------------------------
 
     HKUST-MPAS-HRAIN2025-LIU-CONFIG01-MEM01/
-        Participant_Model_Documentation.pdf
         ERA5-AN/
+            Participant_Model_Documentation.pdf
             Init-0/
                 ERA5-AN-MPAS-HRAIN2025-20250803000000.nc
                 ERA5-AN-MPAS-HRAIN2025-20250803010000.nc
                 ...
         GFS-FC/
+            Participant_Model_Documentation.pdf
             Init-5/
             Init-4/
             Init-3/
@@ -72,7 +73,10 @@ Rules:
   * Every .nc file sits exactly three levels down:
         <top>/<experiment>/<Init-*>/<file>.nc
   * Include only the directories you actually ran. Do not create empty ones.
-  * A model documentation PDF (or DOCX) at the top level is required.
+  * Every experiment containing .nc files requires a model documentation PDF
+    (or DOCX) directly in that experiment directory, shared by all its Init-* runs.
+    A document at the archive root or inside Init-* does not satisfy this rule,
+    even when submitting only one experiment.
 
 Experiment directory names - use the canonical RUMI identifiers, the same ones
 that appear in your filenames and in the "experiment" global attribute:

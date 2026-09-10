@@ -24,7 +24,7 @@ ARCHIVE_NAME = f"{STEM}.zip"
 EXPERIMENT = "ERA5-AN"
 MODEL = "MPAS"
 EVENT = "HRAIN2025"
-DOC_MEMBER = f"{STEM}/Participant_Model_Documentation.pdf"
+DOC_MEMBER = f"{STEM}/{EXPERIMENT}/Participant_Model_Documentation.pdf"
 
 # The required ~1 km / sub-km hourly series for HRAIN2025, taken straight from
 # rumi_protocol so the test data can never silently drift from the protocol
@@ -232,6 +232,44 @@ class ArchiveStructureTests(RumiTestCase):
         result = portal_lib.validate_archive_structure(names, ARCHIVE_NAME)
 
         self.assert_message(result["errors"], "Participant_Model_Documentation")
+
+    def test_documentation_is_required_per_experiment_not_per_init(self):
+        names = [DOC_MEMBER, f"{STEM}/GFS-FC/Participant_Model_Documentation.docx"]
+        for experiment, init_label in ((EXPERIMENT, "Init-0"), ("GFS-FC", "Init-1"), ("GFS-FC", "Init-2")):
+            names.append(nc_path(STEM, experiment, init_label, MODEL, EVENT, KM_SERIES[0]))
+        result = portal_lib.validate_archive_structure(names, ARCHIVE_NAME)
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["summary"]["documentation_files"], 2)
+        missing_fc = portal_lib.validate_archive_structure(
+            [name for name in names if not name.endswith(".docx")], ARCHIVE_NAME
+        )
+        self.assertEqual(len(missing_fc["errors"]), 1)
+        self.assert_message(missing_fc["errors"], "GFS-FC: Participant_Model_Documentation")
+
+    def test_root_or_init_document_cannot_replace_experiment_document(self):
+        for location in (STEM, f"{STEM}/{EXPERIMENT}/Init-0", f"{STEM}/GFS-FC"):
+            with self.subTest(location=location):
+                names = [
+                    f"{location}/Participant_Model_Documentation.pdf",
+                    nc_path(STEM, EXPERIMENT, "Init-0", MODEL, EVENT, KM_SERIES[0]),
+                ]
+                result = portal_lib.validate_archive_structure(names, ARCHIVE_NAME)
+                self.assert_message(result["errors"], f"{EXPERIMENT}: Participant_Model_Documentation")
+
+    def test_document_only_experiment_does_not_require_netcdf(self):
+        names = [DOC_MEMBER, f"{STEM}/GFS-FC/notes.pdf",
+                 nc_path(STEM, EXPERIMENT, "Init-0", MODEL, EVENT, KM_SERIES[0])]
+        result = portal_lib.validate_archive_structure(names, ARCHIVE_NAME)
+        self.assertEqual(result["errors"], [])
+
+    def test_pdf_and_docx_extensions_remain_supported(self):
+        for extension in ("pdf", "docx", "PDF", "DOCX"):
+            with self.subTest(extension=extension):
+                result = portal_lib.validate_archive_structure([
+                    f"{STEM}/{EXPERIMENT}/Participant_Model_Documentation.{extension}",
+                    nc_path(STEM, EXPERIMENT, "Init-0", MODEL, EVENT, KM_SERIES[0]),
+                ], ARCHIVE_NAME)
+                self.assertEqual(result["errors"], [])
 
     def test_unsafe_paths_rejected(self):
         names = [DOC_MEMBER, f"{STEM}/../evil.txt"]
@@ -754,3 +792,49 @@ class RealNetcdfArchiveTests(unittest.TestCase):
                             self.assertTrue(any(expected_error in error for error in result["errors"]), result)
                         else:
                             self.assertEqual(result["errors"], [])
+
+    def test_per_experiment_documents_in_real_zip_and_tar(self):
+        import subprocess
+        import tarfile
+        from fixtures.make_fixture_archive import make_fixture
+
+        for extension in ("zip", "tar.gz"):
+            for placement in ("experiment", "root", "init", "missing_fc"):
+                with self.subTest(extension=extension, placement=placement):
+                    with tempfile.TemporaryDirectory() as directory:
+                        fixture = make_fixture(
+                            directory, tree=["ERA5-AN/Init-0", "GFS-FC/Init-1"],
+                            hours=2, real_netcdf=True,
+                        )
+                        root = fixture["root"]
+                        for document in root.glob("*/Participant_Model_Documentation.pdf"):
+                            if placement == "root":
+                                document.replace(root / document.name)
+                            elif placement == "init":
+                                init_dir = next(document.parent.glob("Init-*"))
+                                document.rename(init_dir / document.name)
+                            elif placement == "missing_fc" and document.parent.name == "GFS-FC":
+                                document.unlink()
+                        archive = root.parent / (root.name + "." + extension)
+                        if extension == "zip":
+                            with zipfile.ZipFile(archive, "w") as bundle:
+                                for path in root.rglob("*"):
+                                    if path.is_file():
+                                        bundle.write(path, path.relative_to(root.parent))
+                        else:
+                            with tarfile.open(archive, "w:gz") as bundle:
+                                bundle.add(root, arcname=root.name)
+                        portal = portal_lib.validate_archive(
+                            archive, archive.name, {"experiment": "(archive)", "model": MODEL, "event": EVENT}
+                        )
+                        proc = subprocess.run(
+                            [sys.executable, str(ROOT / "portal/downloads/rumi_validate.py"),
+                             "--json", str(archive)], capture_output=True, text=True, timeout=120,
+                        )
+                        self.assertEqual(proc.returncode, 0 if placement == "experiment" else 1, proc.stdout + proc.stderr)
+                        local = json.loads(proc.stdout)
+                        for result in (portal, local):
+                            if placement == "experiment":
+                                self.assertEqual(result["errors"], [])
+                            else:
+                                self.assertTrue(any("GFS-FC: Participant_Model_Documentation" in message for message in result["errors"]), result)
