@@ -1,6 +1,6 @@
 # RUMI Portal Persistent Context
 
-Last verified: 2026-09-08
+Last verified: 2026-09-10
 
 ## Local Repository
 
@@ -233,6 +233,23 @@ The SQLite database is the authoritative index. Institution is stored as a submi
 
 
 ## Deployment log
+
+- **2026-09-10** — RUMI protocol v3.4
+  (`RULES_VERSION: 2026-09-rumi-v3.4`) deployed from Git commit `90084d8`.
+  Each experiment directory containing NetCDF files now requires a PDF/DOCX
+  directly inside that directory, shared by all its Init-* runs. Root-level
+  and Init-level documents do not satisfy the requirement, including for
+  single-experiment submissions. Missing-document errors name the experiment.
+  Existing submissions and the database remain unchanged; resubmissions use
+  the new rules. Updated frontend examples, file-selection hint, participant
+  instructions, and generated standalone validator.
+  Verified: 154 tests passed, including real AN+FC ZIP/tar.gz submissions,
+  missing experiment documentation, and root/Init-level rejection. Both local
+  and backend validators agree. Authenticated local desktop/mobile upload-page
+  checks passed; production API reports v3.4, page/JS/validator hashes match,
+  browser reports no console errors, private data returns 403, legacy URL 308.
+  Server staging compilation and real AN+FC archive validation passed.
+  Code backup: `/home/lzhenn/RUMI-code-backup-20260910-v34.tar.gz`.
 
 - **2026-09-08** — RUMI protocol v3.3
   (`RULES_VERSION: 2026-09-rumi-v3.3`) deployed from Git commit `f8a4752`.
