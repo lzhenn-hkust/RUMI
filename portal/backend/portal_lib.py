@@ -284,17 +284,29 @@ def open_private_binary_append(path):
         raise
 
 
-def connect_db():
-    ensure_dirs()
-    con = sqlite3.connect(DB_PATH)
+def connect_db(*, initialize=False):
+    """Open the database; migrations belong to explicit maintenance commands.
+
+    Ordinary requests must not create directories, chmod NFS files, or seed
+    profiles. Use mode=rw so a missing database cannot silently become empty.
+    """
+    if initialize:
+        ensure_dirs()
+    uri = DB_PATH.absolute().as_uri() + ("?mode=rwc" if initialize else "?mode=rw")
+    con = sqlite3.connect(uri, uri=True)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA busy_timeout = 5000")
     con.execute("PRAGMA foreign_keys = ON")
-    init_schema(con)
-    try:
-        DB_PATH.chmod(PRIVATE_FILE_MODE)
-    except OSError:
-        pass
+    if initialize:
+        try:
+            init_schema(con)
+            try:
+                DB_PATH.chmod(PRIVATE_FILE_MODE)
+            except OSError:
+                pass
+        except Exception:
+            con.close()
+            raise
     return con
 
 
@@ -534,6 +546,8 @@ def seed_participation_profiles(con):
                 END,
                 updated_at = ?
             WHERE id = ?
+              AND (COALESCE(TRIM(poc_surname), '') = ''
+                   OR COALESCE(TRIM(participants), '') = '')
             """,
             (seed["poc_surname"], seed["participants"], now, user["id"]),
         )
@@ -585,7 +599,7 @@ def token_hash(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def create_session(con, user_id):
+def create_session(con, user_id, *, commit=True):
     token = new_token()
     now = utcnow()
     expires = (
@@ -598,7 +612,8 @@ def create_session(con, user_id):
         """,
         (token_hash(token), user_id, now, expires, now),
     )
-    con.commit()
+    if commit:
+        con.commit()
     return token, expires
 
 

@@ -219,7 +219,7 @@ def client_ip():
     return os.environ.get("REMOTE_ADDR", "")[:64]
 
 
-def record_login_attempt(con, email, success):
+def record_login_attempt(con, email, success, *, commit=True):
     con.execute(
         "INSERT INTO login_attempts(email, ip, success, attempted_at) VALUES (?, ?, ?, ?)",
         (normalize_email(email), client_ip(), 1 if success else 0, utcnow()),
@@ -227,7 +227,8 @@ def record_login_attempt(con, email, success):
     con.execute(
         "DELETE FROM login_attempts WHERE attempted_at < datetime('now', '-1 day')"
     )
-    con.commit()
+    if commit:
+        con.commit()
 
 
 def too_many_login_attempts(con, email):
@@ -316,8 +317,7 @@ def public_user(con, row):
     return user
 
 
-def handle_me(con):
-    user = current_user(con)
+def me_payload(con, user):
     stats = {}
     if user:
         if user["role"] == "admin":
@@ -334,6 +334,10 @@ def handle_me(con):
                 ).fetchone()["c"],
             }
     return {"ok": True, "user": public_user(con, user), "stats": stats, "constants": constants_payload()}
+
+
+def handle_me(con):
+    return me_payload(con, current_user(con))
 
 
 def handle_register(con):
@@ -398,14 +402,17 @@ def handle_login(con):
     if row["status"] != "approved":
         record_login_attempt(con, email, False)
         raise PortalError(403, "This account is not approved yet.")
-    record_login_attempt(con, email, True)
-    token, expires = create_session(con, row["id"])
-    now = utcnow()
-    con.execute("UPDATE users SET last_login = ?, updated_at = ? WHERE id = ?", (now, now, row["id"]))
-    con.commit()
-    row = con.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
+    # Keep the successful audit record, session and login timestamp atomic,
+    # avoiding three separate journal syncs on shared storage.
+    with con:
+        record_login_attempt(con, email, True, commit=False)
+        token, expires = create_session(con, row["id"], commit=False)
+        now = utcnow()
+        con.execute("UPDATE users SET last_login = ?, updated_at = ? WHERE id = ?", (now, now, row["id"]))
+        row = con.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
+        user = public_user(con, row)
     return {
-        "payload": {"ok": True, "user": public_user(con, row), "constants": constants_payload()},
+        "payload": {"ok": True, "user": user, "constants": constants_payload()},
         "cookies": [session_cookie(token, expires=expires), csrf_cookie(token)],
     }
 
@@ -513,6 +520,7 @@ def handle_admin_create_user(con):
         """,
         (email, name, institution, role, status, salt, digest, now, now),
     )
+    seed_participation_profiles(con)
     con.commit()
     return {"ok": True, "temporary_password": password}
 
@@ -982,8 +990,12 @@ def main():
         handler = ROUTES.get(action)
         if not handler:
             raise PortalError(404, "Unknown API action.")
-        with connect_db() as con:
-            result = handler(con)
+        if action == "me" and not request_cookie("rumi_session"):
+            # There is no identity to look up. Public configuration is static.
+            result = me_payload(None, None)
+        else:
+            with connect_db() as con:
+                result = handler(con)
         if isinstance(result, dict) and "payload" in result:
             send_json(result["payload"], cookies=result.get("cookies"))
         else:

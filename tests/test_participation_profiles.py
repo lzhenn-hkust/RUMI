@@ -94,6 +94,17 @@ class ParticipationProfileTests(unittest.TestCase):
 
         self.assertEqual(result["user"]["participation_profiles"][0]["model"], "MPAS")
 
+    def test_reseeding_complete_profiles_does_not_write_or_change_timestamps(self):
+        portal_lib.seed_participation_profiles(self.con)
+        self.con.commit()
+        self.con.execute("UPDATE users SET updated_at = 'original' WHERE id = 5")
+        self.con.commit()
+        before = self.con.total_changes
+        with mock.patch.object(portal_lib, "utcnow", return_value="later"):
+            portal_lib.seed_participation_profiles(self.con)
+        self.assertEqual(self.con.total_changes, before)
+        self.assertEqual(self.con.execute("SELECT updated_at FROM users WHERE id = 5").fetchone()[0], "original")
+
     def test_upload_identity_comes_from_database_profile(self):
         loader_path = ROOT / "portal" / "api.cgi"
         import importlib.machinery

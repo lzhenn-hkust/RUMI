@@ -236,3 +236,26 @@ duplicates, and expanded size before the derived copy becomes visible. The
 database records `extraction_status` (`queued`, `extracting`, `ready`, or
 `failed`) plus the derived paths and file counts; a failed extraction never
 removes the accepted original archive.
+
+## Portal Database Maintenance
+
+Ordinary API and validation-worker connections open an existing database;
+they do not create directories, migrate the schema, or seed participation
+profiles. Before serving a fresh installation or a release with schema changes,
+run the following with the portal's runtime permissions and data configuration:
+
+```bash
+python3 portal/backend/manage.py migrate
+```
+
+On production, the files are directly under the deployed site root, so the
+command is `python3 backend/manage.py migrate`. Run database maintenance on the
+Web host, not on another host that mounts the same NFS database. Existing
+`init` and `status` maintenance commands also initialize the schema. Back up
+the database with SQLite's backup API before applying migrations.
+
+Anonymous `me` requests return public configuration without opening the
+database. Successful login records its audit entry, session, and login
+timestamp in one transaction; failed login attempts remain committed so rate
+limiting survives a rejected request. Account creation explicitly seeds known
+participation profiles; repeat seeding preserves complete account timestamps.

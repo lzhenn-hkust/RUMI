@@ -1,6 +1,6 @@
 # RUMI Portal Persistent Context
 
-Last verified: 2026-09-10
+Last verified: 2026-10-09
 
 ## Local Repository
 
@@ -34,8 +34,10 @@ Consequences that are easy to get wrong:
   validations are reaped opportunistically inside ordinary CGI requests instead
   (`portal_lib.reap_stale_validations`), with
   `manage.py reap-stale-validations` kept only as a manual admin command.
-- Apache 2.4.6, and `httpd.conf` sets no `Timeout`, so the default 60 s applies.
-  This is why archive validation runs in a detached worker rather than inline.
+- Live verification on 2026-10-09: Rocky Linux 9.5, Apache 2.4.62, and
+  `/etc/httpd/conf/httpd.conf:50` sets `Timeout 7200`. Earlier notes saying
+  Apache 2.4.6/default 60 s were incorrect for the Web host. Archive validation
+  remains in a detached worker rather than inline.
 
 Verified by probe on 2026-08-18: a CGI that starts a child with
 `start_new_session=True` returns in 0.73 s and the child is still alive 75 s
@@ -62,6 +64,12 @@ later. Probe files were deleted afterwards.
   ```
 
 - `hqlx54` is available for NetCDF validation when the software environment on `hqlx74` has compatibility issues.
+- Actual Web-host shell access: from `hqlx74`, use `dataview@cozumel`.
+  `envf.ust.hk` is a CNAME for `cozumel.ust.hk` (`143.89.115.22`). The existing
+  ECDSA key is recorded as `cozumel` in `/home/lzhenn/.ssh/known_hosts`; override
+  the old SSH config's `/dev/null` known-hosts setting with
+  `-o UserKnownHostsFile=/home/lzhenn/.ssh/known_hosts -o StrictHostKeyChecking=yes`.
+  `dataview` cannot read the live private database or Apache thread stacks.
 
 ## Web Portal Location
 
@@ -189,10 +197,12 @@ the only place 3.11+ syntax would be caught.
    Compare the staged SHA-256 against the local file before overwriting the
    live site, and clean up `/tmp/rumi-stage` afterwards.
 
-5. Verify the public index and API, compare SHA-256 hashes, and confirm the
-   SQLite schema after the first API request. The API applies additive schema
-   migrations automatically (`portal_lib.UPLOAD_COLUMN_ADDITIONS` and
-   `USER_COLUMN_ADDITIONS`); confirm the new columns exist:
+5. Before serving releases that change the schema, run
+   `python3 backend/manage.py migrate` on the Web host with runtime data access.
+   Since the login performance fix, ordinary API requests do not initialize or
+   migrate the database. Verify the public index and API, compare SHA-256
+   hashes, and confirm all `portal_lib.UPLOAD_COLUMN_ADDITIONS` and
+   `USER_COLUMN_ADDITIONS` exist. Do not run write maintenance on `hqlx74`.
 
    Nested-ssh quoting makes one-liners unreadable and easy to get wrong. Pipe a
    script over stdin instead:
@@ -201,8 +211,7 @@ the only place 3.11+ syntax would be caught.
    ssh mini 'ssh hqlx74 "/home/lzhenn/array74/soft/anaconda3/bin/python3 -"' < check_schema.py
    ```
 
-   where `check_schema.py` inserts `/home/lzhenn/RUMI/backend` on `sys.path`,
-   calls `portal_lib.connect_db()`, and prints whether every column named in
+   where `check_schema.py` opens SQLite with `mode=ro`, and prints whether every column named in
    `portal_lib.UPLOAD_COLUMN_ADDITIONS` and `USER_COLUMN_ADDITIONS` is present.
    An `AttributeError` on those names means the release did not actually land.
 
@@ -233,6 +242,32 @@ The SQLite database is the authoritative index. Institution is stored as a submi
 
 
 ## Deployment log
+
+- **2026-10-09** — Login performance fix deployed at 10:35 HKT.
+  Anonymous `me` no longer opens SQLite. Ordinary connections open the existing
+  database without directory chmod, schema initialization, or profile seeding.
+  Successful login commits audit/session/timestamp together; failed attempts
+  remain durable for rate limiting. Profile seeding no longer changes complete
+  users' timestamps. New `manage.py migrate` explicitly initializes/upgrades
+  the database; `init` and `status` retain initialization behavior. Account
+  creation explicitly seeds profiles. No schema or data-location changes.
+  Database relocation was evaluated but deferred: reducing unnecessary NFS
+  operations restored fast responses without changing storage/backup topology.
+  Verified: 165 local tests, Python compilation, generated-download checks,
+  and 16 targeted tests on the actual Web host's Python 3.10.14 passed.
+  An isolated CGI flow on that host passed login, authenticated `me`, uploads,
+  logout, revoked-session recognition and bad-password audit persistence.
+  Live anonymous `me`: 0.088–0.203 s, median 0.098 s (previously 3.8–6.7 s).
+  Anonymous uploads/admin requests return 401; private data returns 403.
+  Code backup: `/home/lzhenn/RUMI-code-backup-20261009-103010-login-performance.tar.gz`
+  (99,923 bytes; SHA-256 `57bf09fad7932a6e2319c8e4c57f7ce0727951a8468666811854cd57b20b6149`).
+  SQLite backup, made using its online backup API from a read-only source:
+  `/home/lzhenn/RUMI_portal_private/rumi_portal.sqlite3.backup-20261009-103010-login-performance`.
+  Backup and post-deployment integrity checks passed; counts remained 7 users,
+  41 uploads, 57 sessions. The API error log had no new entries.
+  For rollback of this code-only release, restore only
+  `api.cgi`, `backend/portal_lib.py`, and `backend/manage.py` from the code
+  backup; do not roll back the live database and lose subsequent user activity.
 
 - **2026-09-10** — RUMI protocol v3.4
   (`RULES_VERSION: 2026-09-rumi-v3.4`) deployed from Git commit `90084d8`.

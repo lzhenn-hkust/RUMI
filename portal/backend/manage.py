@@ -9,6 +9,7 @@ from portal_lib import (
     extract_archive,
     reap_stale_validations,
     connect_db,
+    seed_participation_profiles,
     ensure_registration_code,
     hash_password,
     import_whitelist,
@@ -23,7 +24,7 @@ from portal_lib import (
 
 
 def init(args):
-    with connect_db() as con:
+    with connect_db(initialize=True) as con:
         emails = load_whitelist_file(args.whitelist)
         import_whitelist(con, emails, source="Email List.docx")
         registration_code = ensure_registration_code(con)
@@ -63,6 +64,7 @@ def init(args):
                     now,
                 ),
             )
+        seed_participation_profiles(con)
         con.commit()
 
         print(f"whitelist_count={len(emails)}")
@@ -106,7 +108,7 @@ def reset_password(args):
 
 
 def status(args):
-    with connect_db() as con:
+    with connect_db(initialize=True) as con:
         users = con.execute("SELECT status, COUNT(*) AS c FROM users GROUP BY status").fetchall()
         uploads = con.execute("SELECT status, COUNT(*) AS c FROM uploads GROUP BY status").fetchall()
         whitelist = con.execute("SELECT COUNT(*) AS c FROM whitelist").fetchone()["c"]
@@ -115,6 +117,13 @@ def status(args):
             print(f"users.{row['status']}={row['c']}")
         for row in uploads:
             print(f"uploads.{row['status']}={row['c']}")
+
+
+def migrate(args):
+    """Prepare private directories and apply additive database migrations."""
+    with connect_db(initialize=True):
+        pass
+    print("database_ready=1")
 
 
 def delete_upload(args):
@@ -230,6 +239,9 @@ def main():
 
     p_status = sub.add_parser("status")
     p_status.set_defaults(func=status)
+
+    p_migrate = sub.add_parser("migrate", help="Initialize or upgrade the portal database")
+    p_migrate.set_defaults(func=migrate)
 
     p_delete = sub.add_parser("delete-upload")
     p_delete.add_argument("--upload-id", required=True)
