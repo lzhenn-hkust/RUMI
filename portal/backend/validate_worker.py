@@ -1,4 +1,4 @@
-#!/home/lzhenn/array74/soft/anaconda3/bin/python3
+#!/disk/r074/lzhenn/soft/anaconda3/bin/python3
 """Validate a submitted archive outside the web request.
 
 A per-event RUMI archive holds several hundred NetCDF files and takes minutes

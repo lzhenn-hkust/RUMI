@@ -1,4 +1,4 @@
-#!/home/lzhenn/array74/soft/anaconda3/bin/python3
+#!/disk/r074/lzhenn/soft/anaconda3/bin/python3
 import argparse
 import secrets
 import sys

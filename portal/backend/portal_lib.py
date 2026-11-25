@@ -804,7 +804,7 @@ def _read_process_output(stream, limit, result, key):
 
 def run_command(args, timeout=60):
     env = os.environ.copy()
-    env["PATH"] = "/home/lzhenn/array74/soft/anaconda3/bin:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH", "")
+    env["PATH"] = "/disk/r074/lzhenn/soft/anaconda3/bin:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH", "")
     process = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
@@ -865,7 +865,7 @@ def ncdump_candidates():
         "/usr/bin/ncdump",
         "/usr/local/bin/ncdump",
         shutil.which("ncdump"),
-        "/home/lzhenn/array74/soft/anaconda3/bin/ncdump",
+        "/disk/r074/lzhenn/soft/anaconda3/bin/ncdump",
     ]
 
 
